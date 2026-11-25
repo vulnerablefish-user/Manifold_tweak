@@ -1,0 +1,54 @@
+name: MANIFOLD Host Build
+
+on:
+  push:
+    branches:
+      - sequence-generator
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out MANIFOLD
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential libfribidi0
+
+      - name: Install Pillow
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install Pillow
+
+      - name: Verify font support
+        run: |
+          python -c "from PIL import features; print('RAQM:', features.check('raqm')); assert features.check('raqm')"
+
+      - name: Fetch fm1-base and apply patches
+        run: |
+          git clone --recursive https://github.com/charlesvestal/fm1-base.git fm1-base
+          git -C fm1-base checkout 2d8ed74
+          git -C fm1-base submodule update --init --recursive
+          git -C fm1-base/bsp checkout 773b0b9
+          git -C fm1-base apply ../patches/fm1-base.patch
+          git -C fm1-base/bsp apply ../../patches/felucca-bsp.patch
+
+      - name: Build host simulator
+        working-directory: fm1-base
+        run: python tools/build.py .. --host
+
+      - name: Run basic simulator tests
+        working-directory: fm1-base
+        run: ../build/host/manifold_host ../tests/basic.txt ../build/host
