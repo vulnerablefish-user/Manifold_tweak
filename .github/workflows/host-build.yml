@@ -52,3 +52,10 @@ jobs:
       - name: Run basic simulator tests
         working-directory: fm1-base
         run: ../build/host/manifold_host ../tests/basic.txt ../build/host
+              - name: Upload host simulator
+        uses: actions/upload-artifact@v7
+        with:
+          name: manifold-host-linux
+          path: build/host/
+          if-no-files-found: error
+          retention-days: 14
