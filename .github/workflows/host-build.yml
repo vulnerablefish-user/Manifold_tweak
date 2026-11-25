@@ -1,3 +1,4 @@
+
 name: MANIFOLD Host Build
 
 on:
@@ -52,8 +53,9 @@ jobs:
       - name: Run basic simulator tests
         working-directory: fm1-base
         run: ../build/host/manifold_host ../tests/basic.txt ../build/host
-              - name: Upload host simulator
-        uses: actions/upload-artifact@v7
+
+      - name: Upload host simulator
+        uses: actions/upload-artifact@v4
         with:
           name: manifold-host-linux
           path: build/host/
