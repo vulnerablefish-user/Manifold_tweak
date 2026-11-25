@@ -6,11 +6,11 @@
  *
  * with w a smooth bump of the point's distance to the node on the surface (the Tonnetz: neighbours are fifths, thirds,
  * sixths) and wt_n the note's tonal weight (engine.c). So pitch is where a point is, and loudness is
- * its envelope where it is: there is no grid, no sequence and no event anywhere. Polyphony is the number of points
- * (Points), spread along the same motion (Spread).
+ * its envelope where it is. Sequence is the recorded-note path; the other motions are generated continuously.
+ * Polyphony is the number of points (Points), spread along the same motion (Spread).
  *
- * Motions: nine, each a different kind of behaviour (A and B are each one's two controls; Rate its speed, a
- * whole-number ratio to the bar, so a periodic motion repeats with the rhythm):
+ * Motions: thirteen, each a different kind of behaviour (A and B are motion-specific controls; Sequence ignores them;
+ * Rate is its speed, a whole-number ratio to the bar, so a periodic motion repeats with the rhythm):
  *   Orbit      a closed figure at a frequency ratio (a Lissajous figure): a loop, an ostinato
  *   Ladder     a run through the notes in order of pitch, up, up and down, or down, resting on each: scales and
  *              arpeggios by step (every other motion moves on the lattice, by fifths and thirds)
@@ -23,6 +23,7 @@
  *   Gravity    the point orbits the key's own notes (wells at the ding, then its fifth, then its third): it falls
  *              toward the tonic, swings round it and away
  *   Stride     it moves only as the rhythm's stream peaks, and turns while it rests: a melody that steps on the beat
+ *   Sequence   one point visits up to 16 recorded notes in order, then loops
  * Envelopes (each point's, Contour shapes them):
  *   Pulse      a periodic peak, at Env rate in exact ratio to the bar and locked to it
  *   Swell      a periodic swell, the same
@@ -39,7 +40,7 @@
 #include "synth.h"
 #include "mstring.h"
 
-static const char *const GEN_N[NUM_GENS] = {"Orbit", "Ladder", "Swarm", "Lorenz", "Motif", "Drift", "Billiard", "Gravity", "Stride", "Loops", "Erode", "Chords"};
+static const char *const GEN_N[NUM_GENS] = {"Orbit", "Ladder", "Swarm", "Lorenz", "Motif", "Drift", "Billiard", "Gravity", "Stride", "Loops", "Erode", "Chords", "Sequence"};
 const char *gen_name(int g) { return g >= 0 && g < NUM_GENS ? GEN_N[g] : "?"; }
 static const char *const ENV_N[NUM_ENVS] = {"Pulse", "Swell", "Speed", "Pass", "Height", "Hold", "Stream", "Drums"};
 const char *env_name(int e) { return e >= 0 && e < NUM_ENVS ? ENV_N[e] : "?"; }
@@ -78,7 +79,7 @@ float grate_value(int r) { return GRATE_V[r < 0 ? 0 : r >= NUM_GRATES ? NUM_GRAT
 static const char *const AB_N[NUM_GENS][2] = {
     {"Ratio", "Phase"}, {"Span", "Contour"}, {"Coupling", "Spread"}, {"Chaos", "Zoom"}, {"Figure", "Answer"},
     {"Detail", "Density"}, {"Angle", "Bumper"}, {"Wells", "Energy"}, {"Turn", "Stride"},
-    {"Notes", "Swell"}, {"Life", "Wear"}, {"Progression", "Voicing"}};
+    {"Notes", "Swell"}, {"Life", "Wear"}, {"Progression", "Voicing"}, {"Unused", "Unused"}};
 const char *gen_ab_name(int g, int which) { return g >= 0 && g < NUM_GENS ? AB_N[g][which & 1] : "?"; }
 
 static const float ORBIT_R[8] = {1.f, 2.f, 1.5f, 4.f / 3, 1.25f, 5.f / 3, 3.f, 2.5f};
@@ -101,6 +102,7 @@ void gen_ab_text(int g, int which, float x, char *b, int len) {
     case GEN_LORENZ: if (!which) { int r = (int)(20.f + 30.f * x + .5f); snprintf(b, len, "rho %d", r); return; } break;
     case GEN_GRAVITY: if (!which) { int w = 1 + shape_idx(x, 3); snprintf(b, len, w == 1 ? "The ding" : w == 2 ? "Ding and fifth" : "Ding, fifth, third"); return; } break;
     case GEN_BILLIARD: if (!which) { snprintf(b, len, "%d deg", (int)(x * 180.f + .5f)); return; } break;
+    case GEN_SEQUENCE: snprintf(b, len, "Unused"); return;
     default: break;
     }
     snprintf(b, len, "%d%%", pc);
@@ -114,8 +116,28 @@ DSP_INL float sn(float t) { return fsin(t); }          /* sin(2 pi t) */
 DSP_INL float powf_(float x, float e) { return x <= 1e-9f ? 0.f : fexp2(e * flog2(x)); }
 
 void gen_reset(GenSt *g, uint32_t seed) {
+    uint8_t seq[MAX_SEQ_NOTES], seq_len = g->seq_len, seq_recording = g->seq_recording;
+    memcpy(seq, g->seq, sizeof seq);
     memset(g, 0, sizeof *g);
+    memcpy(g->seq, seq, sizeof seq); g->seq_len = seq_len; g->seq_recording = seq_recording;
+    /* RAM-only sequences survive rolls and patch changes. */
     g->func = -1; g->key = -1; g->rng = seed * 747796405u + 1u;
+}
+
+/* Sequence capture is deliberately small and RAM-only. layer_mask uses bit 0/1 for layers 1/2. */
+void gen_seq_record(Synth *s, int layer_mask, int on) {
+    for (int l = 0; l < NUM_LAYERS; l++) if (layer_mask & (1 << l)) {
+        GenSt *g = &s->layer[l].g;
+        if (on) { g->seq_len = 0; g->seq_recording = 1; }
+        else g->seq_recording = 0;
+    }
+}
+void gen_seq_note(Synth *s, int layer_mask, int node) {
+    if (node < 0 || node >= MAX_NODES) return;
+    for (int l = 0; l < NUM_LAYERS; l++) if ((layer_mask & (1 << l)) && s->layer[l].g.seq_recording) {
+        GenSt *g = &s->layer[l].g;
+        if (g->seq_len < MAX_SEQ_NOTES) g->seq[g->seq_len++] = (uint8_t)node;
+    }
 }
 
 /* set a function up; what is sounding and the keys carry over */
@@ -172,6 +194,7 @@ static void setup(GenSt *g, int func, int n) {
     memcpy(g->eph, k.eph, sizeof g->eph); memcpy(g->e, k.e, sizeof g->e);
     memcpy(g->rx, k.rx, sizeof g->rx); memcpy(g->ry, k.ry, sizeof g->ry); memcpy(g->rh, k.rh, sizeof g->rh);
     memcpy(g->jx, k.jx, sizeof g->jx); memcpy(g->jy, k.jy, sizeof g->jy); memcpy(g->jh, k.jh, sizeof g->jh);
+    memcpy(g->seq, k.seq, sizeof g->seq); g->seq_len = k.seq_len; g->seq_recording = k.seq_recording;
     g->key = k.key; memcpy(g->ox, k.ox, sizeof g->ox); memcpy(g->oy, k.oy, sizeof g->oy);
     g->rng = k.rng; g->rng0 = k.rng0 ? k.rng0 : k.rng | 1u; g->func = func; g->n = n; g->evo_a = k.evo_a; g->evo_b = k.evo_b; g->t = k.t;
     g->la = -1.f;
@@ -455,6 +478,21 @@ DSP_CTL static void motion(Synth *s, GenSt *g, int func, int j, float tc, float 
         *x = x0 + (x1 - x0) * gl; *y = y0 + (y1 - y0) * gl;
         *h = (float)seg / 3.f;
     } break;
+    case GEN_SEQUENCE: {                                      /* one point visits the recorded notes, forward, then loops */
+        int l = g == &s->layer[1].g, count = g->seq_len, N = s->eng.n_nodes;
+        if (count < 1 || N < 1) { *x = *y = 0.f; *h = 0.f; g->mgn[j] = 0.f; break; }
+        prep(s, l, j);
+        float ph = t - floorf(t), u = ph * (float)count;
+        int i0 = (int)u; if (i0 >= count) i0 = count - 1;
+        int i1 = (i0 + 1) % count;
+        float f = smooth01((u - (float)i0 - .55f) / .45f);
+        int n0 = g->seq[i0], n1 = g->seq[i1];
+        if (n0 >= N) n0 = N - 1; if (n1 >= N) n1 = N - 1;
+        float x0, y0, x1, y1;
+        ncache(l, n0, &x0, &y0); ncache(l, n1, &x1, &y1);
+        *x = x0 + (x1 - x0) * f; *y = y0 + (y1 - y0) * f;
+        *h = count > 1 ? ((float)i0 + f) / (float)count : 0.f;
+    } break;
     default: *x = *y = 0.f; *h = 0.f; break;
     }
 }
@@ -471,8 +509,9 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
     g->evo_a = fclamp(g->evo_a + g->evo_va * dt * evo, -.3f * evo, .3f * evo);
     g->evo_b = fclamp(g->evo_b + g->evo_vb * dt * evo, -.3f * evo, .3f * evo);
     float A = fclamp(pnorm(s, LP(l, P_G1_A)) + g->evo_a, 0.f, 1.f), B = fclamp(pnorm(s, LP(l, P_G1_B)) + g->evo_b, 0.f, 1.f);
+    if (func == GEN_SEQUENCE) A = B = .5f;             /* the recorded phrase defines the notes and their order */
     float rate = GRATE_V[grate_of(pval(s, LP(l, P_G1_RATE)))];   /* cycles a bar: the nearest whole-number ratio */
-    int npts = pint(s, LP(l, P_G1_POINTS)) + 1;
+    int npts = func == GEN_SEQUENCE ? 1 : pint(s, LP(l, P_G1_POINTS)) + 1;
     float spread = pval(s, LP(l, P_G1_SPREAD));
     int env = pint(s, LP(l, P_G1_ENV));
     float erate = ERATE_V[pint(s, LP(l, P_G1_ERATE))] * m->beats;   /* envelope cycles a bar */

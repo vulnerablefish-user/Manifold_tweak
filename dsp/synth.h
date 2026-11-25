@@ -62,6 +62,7 @@ static inline __attribute__((always_inline)) void *dsp_far(void *p) { void *vola
 #define LIM_LA        64          /* the output limiter's look-ahead, samples (1.45 ms) */
 #define MOD_SLOTS     24
 #define MAX_PTS_D     8           /* = MAX_PTS (the drums follow a layer's points) */
+#define MAX_SEQ_NOTES 16          /* Sequence motion: the notes recorded for one layer */
 #define KNOB_WP       4           /* a knob's path: its offsets at -1, -1/2, +1/2 and +1 (0 at the centre) */
 
 #ifndef PI_F
@@ -307,9 +308,9 @@ float rhythm_slow(const struct Synth *s, int q, float ph); /* cos 2 pi (x / q - 
 /* ------------------------------------------------------------------ */
 /* A generator is 1..MAX_PTS points on the Tonnetz, each moving along a continuous function of time, each with an
    envelope that is a continuous function too. A note's loudness is the sum over the points of the point's envelope
-   times a smooth function of its distance to the note. There is no grid and no sequence. */
+   times a smooth function of its distance to the note. Most motions are continuous paths; Sequence is the recorded-note path. */
 enum { GEN_ORBIT, GEN_LADDER, GEN_SWARM, GEN_LORENZ, GEN_MOTIF, GEN_DRIFT, GEN_BILLIARD, GEN_GRAVITY, GEN_STRIDE,
-       GEN_LOOPS, GEN_ERODE, GEN_CHORDS, NUM_GENS };
+       GEN_LOOPS, GEN_ERODE, GEN_CHORDS, GEN_SEQUENCE, NUM_GENS };
 enum { ENV_PULSE, ENV_SWELL, ENV_SPEED, ENV_PASS, ENV_HEIGHT, ENV_HOLD, ENV_STREAM, ENV_DRUMS, NUM_ENVS };
 #define NUM_GRATES 16          /* Rate: whole-number ratios to the bar */
 /* a layer's route: it plays, or it modulates the other layer (and is silent): its path moves the other's points, its
@@ -370,6 +371,8 @@ typedef struct {
     float ht[MAX_PTS];             /* the flow's third coordinate, 0..1 (the Height envelope) */
     float hm[MAX_PTS], hv[MAX_PTS];/* its running mean and variance (2 s): the envelope reads it relative to them */
     float rx[MAX_PTS], ry[MAX_PTS], rh[MAX_PTS], jx[MAX_PTS], jy[MAX_PTS], jh[MAX_PTS]; int key;  /* continuity across formula changes */
+    uint8_t seq[MAX_SEQ_NOTES];    /* Sequence: recorded engine-node indices, in playing order */
+    uint8_t seq_len, seq_recording;
     float avg_age; uint32_t rng0;  /* the averages' age; the motion's fixed seed */
     float sm[MAX_PTS];             /* the speed's running mean (2 s) */
     float ox[MAX_PTS], oy[MAX_PTS];/* the keys' pull on each point (continuous) */
@@ -404,6 +407,8 @@ void gen_reset(GenSt *g, uint32_t seed);
 void gen_tick(struct Synth *s, int layer, float dt);              /* the drive u_n(t) of every node, now */
 void gen_harmony(struct Synth *s, float dt);                      /* a_n = u_n, smoothed (3 ms), both layers */
 void gen_key(struct Synth *s, int layer, int node, float vel, int on);
+void gen_seq_record(struct Synth *s, int layer_mask, int on);
+void gen_seq_note(struct Synth *s, int layer_mask, int node);
 
 /* ------------------------------------------------------------------ */
 /* Effects                                                             */

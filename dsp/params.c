@@ -502,12 +502,12 @@ static void apply_style(Synth *s) {
         TR(s, P_V2_LEVEL, T ? .3f : G ? .4f : .5f, T ? .45f : G ? .6f : .7f);
         TD(s, P_V2_REG, G && frand(r) < .5f ? 0 : 1);
     }
-    /* the motions:            orbit ladder swarm lorenz motif drift billiard gravity stride loops erode chords */
+    /* the motions:            orbit ladder swarm lorenz motif drift billiard gravity stride loops erode chords sequence (not rolled: needs a recorded phrase) */
     if (!s->locked[SEC_GEN1]) {
         /* the rhythm layer: loops and runs with a pulse (tongue, groove), the stream itself, or passing through the
            notes (cosmic), or swelling as it drifts (ambient) */
-        const float wf[4][NUM_GENS] = {{4, 4, 1, 1, 3, 0, 4, 3, 3, 2, 1, 2}, {3, 4, 1, 1, 4, 0, 4, 2, 5, 0, 1, 3},
-                                       {1, 1, 3, 1, 1, 4, 0, 4, 0, 6, 4, 5}, {2, 2, 2, 3, 2, 1, 3, 3, 2, 3, 3, 3}};
+        const float wf[4][NUM_GENS] = {{4, 4, 1, 1, 3, 0, 4, 3, 3, 2, 1, 2, 0}, {3, 4, 1, 1, 4, 0, 4, 2, 5, 0, 1, 3, 0},
+                                       {1, 1, 3, 1, 1, 4, 0, 4, 0, 6, 4, 5, 0}, {2, 2, 2, 3, 2, 1, 3, 3, 2, 3, 3, 3, 0}};
         TP(s, P_G1_FUNC, wf[st - 1]);
         const float we[4][NUM_ENVS] = {{6, 0, 1, 3, 0, 0, 3, 0}, {6, 0, 1, 2, 1, 0, 6, 0}, {1, 4, 3, 2, 2, 1, 0, 0}, {3, 1, 2, 4, 3, 0, 3, 0}};
         TP(s, P_G1_ENV, we[st - 1]);
@@ -531,8 +531,8 @@ static void apply_style(Synth *s) {
     }
     if (!s->locked[SEC_GEN2]) {
         /* the second layer: slow points that swell (a bed), or for groove a low counter-motion */
-        const float wf[4][NUM_GENS] = {{2, 1, 3, 1, 1, 4, 1, 4, 0, 3, 1, 3}, {2, 2, 1, 1, 2, 1, 3, 3, 3, 0, 1, 4},
-                                       {1, 1, 4, 2, 1, 4, 0, 4, 0, 6, 3, 6}, {2, 1, 3, 3, 1, 2, 1, 3, 1, 3, 2, 3}};
+        const float wf[4][NUM_GENS] = {{2, 1, 3, 1, 1, 4, 1, 4, 0, 3, 1, 3, 0}, {2, 2, 1, 1, 2, 1, 3, 3, 3, 0, 1, 4, 0},
+                                       {1, 1, 4, 2, 1, 4, 0, 4, 0, 6, 3, 6, 0}, {2, 1, 3, 3, 1, 2, 1, 3, 1, 3, 2, 3, 0}};
         TP(s, P_G2_FUNC, wf[st - 1]);
         const float we[4][NUM_ENVS] = {{0, 5, 2, 1, 1, 2, 1, 0}, {4, 1, 1, 2, 1, 0, 3, 0}, {0, 5, 2, 1, 2, 2, 0, 0}, {1, 3, 2, 2, 3, 1, 2, 0}};
         TP(s, P_G2_ENV, we[st - 1]);
@@ -556,7 +556,7 @@ static void apply_style(Synth *s) {
             int ro = pickw(&s->rng, wr, NUM_ROUTES); TD(s, P_G2_ROUTE, ro);
             if (ro != ROUTE_MOVE && frand(r) < .65f) {
                 TD(s, P_G2_ENV, ENV_STREAM); TR(s, P_G2_CONTOUR, .2f, .6f);
-                if (!s->locked[SEC_GEN1]) { const float wc[NUM_GENS] = {0, 0, 1, 4, 0, 2, 2, 2, 0, 0, 0, 0}; TP(s, P_G1_FUNC, wc); TD(s, P_G1_ENV, ENV_HOLD); }
+                if (!s->locked[SEC_GEN1]) { const float wc[NUM_GENS] = {0, 0, 1, 4, 0, 2, 2, 2, 0, 0, 0, 0, 0}; TP(s, P_G1_FUNC, wc); TD(s, P_G1_ENV, ENV_HOLD); }
             }
             if (ro == ROUTE_MOVE) TR(s, P_G2_ENERGY, .2f, .6f); else TR(s, P_G2_ENERGY, .6f, 1.f);
         } else TD(s, P_G2_ROUTE, ROUTE_PLAY);

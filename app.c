@@ -83,7 +83,9 @@ static uint8_t set_dirty;
 int manifold_bt_on(void) { return set.bt_on; }
 
 /* a patch: every parameter, the matrix, the macros, the locks and four scenes */
-#define PATCH_MAGIC 0x4D4E5047u          /* "MNPG" (1.0.6): MNP9 with the patterns' 20, the colour's 12, the undertones' 4, Balance's 2 and Dry after */
+#define PATCH_MAGIC 0x4D4E5048u          /* "MNPH" (Sequence V1): 13 generator motions; MNPG and earlier migrate */
+#define PATCH_MAGIC_G 0x4D4E5047u        /* "MNPG" (1.0.6/1.0.7): the previous layout, with 12 generator motions */
+#define NUM_GENS_OLD 12                  /* the motion count encoded by MNPG and every earlier patch format */
 #define PATCH_MAGIC_F 0x4D4E5046u        /* "MNPF" (1.0.5): read, wet */
 #define PATCH_MAGIC_E 0x4D4E5045u        /* "MNPE": a 1.0.5 test build's, before Balance: read, it at its default */
 #define PATCH_MAGIC_D 0x4D4E5044u        /* "MNPD": a 1.0.5 test build's, before the undertones: read, those at their defaults */
@@ -149,7 +151,7 @@ static volatile uint8_t scene_busy;
 
 /* ------------------------------------------------------------------ the queue --- */
 enum { C_PARAM, C_MACRO, C_ROLL, C_MUTATE, C_STYLE, C_NOTE, C_TRANSPORT, C_CAP, C_LOAD, C_LOCK, C_PANIC, C_SCENE,
-       C_LAYER, C_MUTESEQ, C_KEYS, C_SLOT };
+       C_LAYER, C_MUTESEQ, C_KEYS, C_SLOT, C_SEQ_REC, C_SEQ_NOTE };
 enum { CAP_PAD, CAP_UNI, CAP_NODES, CAP_WSOS, CAP_FBST, CAP_CPU2, CAP_HARM };
 typedef struct { uint8_t op, a; uint16_t b; float f; uint32_t u; } cmd_t;
 #define QN 64u
@@ -210,6 +212,8 @@ static void drain(void)                  /* audio interrupt, start of a block */
         case C_LAYER: S.lay_t[c->a & 1u] = c->f; break;
         case C_MUTESEQ: S.mute_seq = c->a; break;
         case C_KEYS: S.keys_to = c->a; break;
+        case C_SEQ_REC: gen_seq_record(&S, c->a, c->b != 0); break;
+        case C_SEQ_NOTE: gen_seq_note(&S, c->a, c->b); break;
         case C_SLOT:                     /* a matrix route: a the route, b source << 8 | destination, f the depth */
             if (c->a < MOD_SLOTS) {
                 ModSlot *m = &S.slot[c->a];
@@ -561,7 +565,7 @@ static int patch_read_b(int slot, patch_t *p)   /* an MNPB patch, its drum-hit p
     if (plat_store_load(patch_obj(slot), &o, sizeof o) != (int)sizeof o || o.magic != PATCH_MAGIC_B
         || o.nparams != NUM_PARAMS_B || o.nslots != MOD_SLOTS)
         return 0;
-    p->magic = PATCH_MAGIC; p->nparams = NUM_PARAMS; p->nslots = MOD_SLOTS; p->seed = o.seed; p->style = o.style;
+    p->magic = PATCH_MAGIC_G; p->nparams = NUM_PARAMS; p->nslots = MOD_SLOTS; p->seed = o.seed; p->style = o.style;
     p->scene_set = o.scene_set; p->rsv[0] = o.rsv[0]; p->rsv[1] = o.rsv[1];
     for (i = 0; i < NUM_PARAMS; i++) {
         int in = i < NUM_PARAMS_A;
@@ -579,43 +583,69 @@ static int patch_read_b(int slot, patch_t *p)   /* an MNPB patch, its drum-hit p
     for (k = 0; k < NSCENE; k++) for (i = 0; i < NUM_MACRO; i++) p->scene_macro[k][i] = o.scene_macro[k][i];
     return 1;
 }
+static float patch_gen_v1(float v)      /* old 12-motion index -> the new 13-motion parameter centre */
+{
+    int i = (int)(v * (float)NUM_GENS_OLD);
+    if (i < 0) i = 0; if (i >= NUM_GENS_OLD) i = NUM_GENS_OLD - 1;
+    return ((float)i + .5f) / (float)NUM_GENS;
+}
+static void patch_gens_up(patch_t *p)   /* the two generator choices, in the patch and its four scenes */
+{
+    int k;
+    p->p[P_G1_FUNC] = patch_gen_v1(p->p[P_G1_FUNC]);
+    p->p[P_G2_FUNC] = patch_gen_v1(p->p[P_G2_FUNC]);
+    for (k = 0; k < NSCENE; k++) {
+        float v1 = (float)p->scene[k][P_G1_FUNC] * (1.f / 65535.f);
+        float v2 = (float)p->scene[k][P_G2_FUNC] * (1.f / 65535.f);
+        p->scene[k][P_G1_FUNC] = (uint16_t)(patch_gen_v1(v1) * 65535.f + .5f);
+        p->scene[k][P_G2_FUNC] = (uint16_t)(patch_gen_v1(v2) * 65535.f + .5f);
+    }
+}
+
 static int patch_read(int slot, patch_t *p)
 {
-    int n;
+    int n, legacy = 0;
+    uint32_t old_magic = 0;
     if (slot < 0 || slot >= N_PATCH)
         return 0;
     if (plat_store_size(patch_obj(slot)) == (int)sizeof(patchB_t)) {   /* (the withdrawn MNPB's size: by its magic, as
-                                                    MNPG has the same 215 parameters and the same size) */
+                                                    MNPG/MNPH have the same parameter count and size) */
         uint32_t mg = 0;
-        if (plat_store_head(patch_obj(slot), &mg, 4) == 4 && mg == PATCH_MAGIC_B)
-            return patch_read_b(slot, p);
+        if (plat_store_head(patch_obj(slot), &mg, 4) == 4 && mg == PATCH_MAGIC_B) {
+            if (!patch_read_b(slot, p)) return 0;
+            old_magic = PATCH_MAGIC_B; legacy = 1;
+            goto loaded;
+        }
     }
     n = plat_store_load(patch_obj(slot), p, sizeof *p);
+    old_magic = p->magic;
     if (n == (int)sizeof(patch9_t) && (p->magic == PATCH_MAGIC_9 || p->magic == PATCH_MAGIC_8) && p->nparams == NUM_PARAMS_9
         && p->nslots == MOD_SLOTS) {
         patch_up9(p);                    /* (an older patch: the patterns' and the voices' new parameters at their defaults) */
-        if (p->magic == PATCH_MAGIC_9)
-            p->magic = PATCH_MAGIC;
+        legacy = 1;
     } else if (n == (int)sizeof(patchA_t) && p->magic == PATCH_MAGIC_A && p->nparams == NUM_PARAMS_A && p->nslots == MOD_SLOTS) {
         patch_upA(p);                    /* (an earlier 1.0.5 test build's: the voices' colour at its defaults) */
-        p->magic = PATCH_MAGIC;
+        legacy = 1;
     } else if (n == (int)sizeof(patchC_t) && p->magic == PATCH_MAGIC_C && p->nparams == NUM_PARAMS_C && p->nslots == MOD_SLOTS) {
         patch_upC(p);                    /* (a later one's: the hits' colour at its defaults) */
-        p->magic = PATCH_MAGIC;
+        legacy = 1;
     } else if (n == (int)sizeof(patchD_t) && p->magic == PATCH_MAGIC_D && p->nparams == NUM_PARAMS_D && p->nslots == MOD_SLOTS) {
         patch_upD(p);                    /* (a later one's still: the undertones at their defaults) */
-        p->magic = PATCH_MAGIC;
+        legacy = 1;
     } else if (n == (int)sizeof(patchF_t) && p->magic == PATCH_MAGIC_F && p->nparams == NUM_PARAMS_F && p->nslots == MOD_SLOTS) {
         patch_upF(p);                    /* (1.0.5's: wet) */
-        p->magic = PATCH_MAGIC;
+        legacy = 1;
     } else if (n == (int)sizeof(patchE_t) && p->magic == PATCH_MAGIC_E && p->nparams == NUM_PARAMS_E && p->nslots == MOD_SLOTS) {
         patch_upE(p);                    /* (the one before Balance: Balanced) */
-        p->magic = PATCH_MAGIC;
-    } else if (n != (int)sizeof *p)
+        legacy = 1;
+    } else if (n == (int)sizeof *p && p->magic == PATCH_MAGIC_G) {
+        legacy = 1;                      /* current 1.0.7 layout, but with 12 generator motions */
+    } else if (n != (int)sizeof *p || p->magic != PATCH_MAGIC)
         return 0;
+loaded:
     if (p->nparams != NUM_PARAMS || p->nslots != MOD_SLOTS)
         return 0;
-    if (p->magic == PATCH_MAGIC_8) {     /* the same BPM in the wider range (the patch and its scenes) */
+    if (old_magic == PATCH_MAGIC_8) {    /* the same BPM in the wider range (the patch and its scenes) */
         const ParamMeta *tm = &g_param_meta[P_TEMPO];
         int k;
         p->p[P_TEMPO] = fm_clampf((60.0f + 120.0f * p->p[P_TEMPO] - tm->lo) / (tm->hi - tm->lo), 0.0f, 1.0f);
@@ -624,9 +654,10 @@ static int patch_read(int slot, patch_t *p)
             u = fm_clampf((60.0f + 120.0f * u - tm->lo) / (tm->hi - tm->lo), 0.0f, 1.0f);
             p->scene[k][P_TEMPO] = (uint16_t)(u * 65535.0f + 0.5f);
         }
-        p->magic = PATCH_MAGIC;
     }
-    return p->magic == PATCH_MAGIC;
+    if (legacy) patch_gens_up(p);
+    p->magic = PATCH_MAGIC;
+    return 1;
 }
 
 /* the power-on scale: the 1-3-5-9 hexany, unrotated, its ding on A1 (MIDI 33) */
@@ -709,7 +740,7 @@ void app_init(void)
     S.transport = 0;                     /* silent at power-on: PLAY starts the generators (the keys play at once) */
     for (i = 0; i < N_PATCH; i++) {
         uint32_t magic;
-        if (plat_store_head(patch_obj((int)i), &magic, 4) == 4 && (magic == PATCH_MAGIC || magic == PATCH_MAGIC_A || magic == PATCH_MAGIC_B || magic == PATCH_MAGIC_C || magic == PATCH_MAGIC_D || magic == PATCH_MAGIC_E || magic == PATCH_MAGIC_F || magic == PATCH_MAGIC_9 || magic == PATCH_MAGIC_8))
+        if (plat_store_head(patch_obj((int)i), &magic, 4) == 4 && (magic == PATCH_MAGIC || magic == PATCH_MAGIC_G || magic == PATCH_MAGIC_A || magic == PATCH_MAGIC_B || magic == PATCH_MAGIC_C || magic == PATCH_MAGIC_D || magic == PATCH_MAGIC_E || magic == PATCH_MAGIC_F || magic == PATCH_MAGIC_9 || magic == PATCH_MAGIC_8))
             patch_here |= 1ull << i;
     }
     if (set.last_patch >= 0)
@@ -1285,6 +1316,8 @@ static struct {
     uint32_t edit_t[4];
     /* performance */
     uint8_t latch, mute[4], fill, keys_prev;
+    uint8_t oct_pending, oct_combo;      /* defer OCT +/- until release, so both together can record */
+    uint8_t seq_recording, seq_mask, seq_count; /* capture: layer mask (bit 0/1), queued notes */
     uint8_t roll_pend;                  /* 1: a style roll waits for PRESET to rest; 2: a seed for ALGO */
     uint32_t roll_t, seed_pend;
     float fill_dens, fill_rat;
@@ -2123,6 +2156,9 @@ static void keys_in(uint32_t keys)
                     continue;
                 key_node[k] = (int8_t)nd;
                 cmd(C_NOTE, 1, (uint32_t)nd, (float)(v ? v : 100u) * (1.0f / 127.0f), 0);
+                if (ui.seq_recording && ui.seq_count < MAX_SEQ_NOTES && cmd(C_SEQ_NOTE, ui.seq_mask, (uint32_t)nd, 0.0f, 0)) {
+                    if (++ui.seq_count == MAX_SEQ_NOTES) app_say("Sequence", "16 notes: full");
+                }
                 mo_key((int)k, nd, (int)(v ? v : 100u), 1);
                 if (ui.latch)
                     latched |= bit;
@@ -2170,10 +2206,30 @@ static void bank_step(int d)             /* OCT - / + or K1 on the Patches page 
     app_say(BANK_N[bank], "SAVE + key: save   /   HOME + key: load");
 }
 
+static void oct_step(int b)              /* a single OCT press, applied on release */
+{
+    char t[8];
+    if (ui.page == PG_PATCH) { bank_step(b == B_OCTUP ? 1 : -1); return; }
+    set.oct = (int8_t)clamp(set.oct + (b == B_OCTUP ? 1 : -1), -3, 3);
+    set_dirty = 1;
+    int_text(set.oct, t);
+    app_say("Key octave", t);
+}
+
 static void buttons_in(uint32_t btn)
 {
     uint32_t b, now = plat_ms() | 1u;
     uint32_t down = btn & ~ui.btn, up = ui.btn & ~btn;
+    uint32_t oct_mask = (1u << B_OCTDN) | (1u << B_OCTUP);
+    /* Holding both octave buttons is the sequence-record gesture. Defer a single octave step until release. */
+    if (!ui.oct_combo && !(btn & (1u << B_SAVE)) && (btn & oct_mask) == oct_mask) {
+        ui.oct_combo = 1; ui.oct_pending = 0; ui.seq_recording = 0; ui.seq_count = 0;
+        ui.seq_mask = set.keys_to == 3 ? 0 : set.keys_to == 2 ? 3 : (uint8_t)(1u << set.keys_to);
+        if (ui.seq_mask) {
+            ui.seq_recording = cmd(C_SEQ_REC, ui.seq_mask, 1, 0.0f, 0);
+            app_say("Sequence", ui.seq_recording ? "Recording: play notes" : "Recorder busy");
+        } else app_say("Sequence", "Keys are set to Drums");
+    }
     ui.btn = btn;
     for (b = 0; b < NB; b++) {
         int pg;
@@ -2193,25 +2249,15 @@ static void buttons_in(uint32_t btn)
             break;
         case B_SAVE: ui.save_t = now; ui.save_used = 0; break;
         case B_PLAY: ui.play_t = now; ui.play_used = 0; ui.redraw = 1; break;
-        case B_OCTDN: case B_OCTUP: {
-            char t[8];
-            if (ui.save_t) {                         /* SAVE + OCT+: keep the settings; SAVE + OCT-: nothing (a slip
-                                                      * never moves the keys) */
+        case B_OCTDN: case B_OCTUP:
+            if (ui.oct_combo) break;
+            if (ui.save_t || (btn & (1u << B_SAVE))) { /* preserve SAVE + OCT+ settings shortcut */
                 ui.save_used = 1;
-                if (b == B_OCTUP)
-                    keep_settings();
+                if (b == B_OCTUP) keep_settings();
                 break;
             }
-            if (ui.page == PG_PATCH) {               /* the Patches page: OCT chooses the bank */
-                bank_step(b == B_OCTUP ? 1 : -1);
-                break;
-            }
-            set.oct = (int8_t)clamp(set.oct + (b == B_OCTUP ? 1 : -1), -3, 3);
-            set_dirty = 1;
-            int_text(set.oct, t);
-            app_say("Key octave", t);
+            ui.oct_pending = b == B_OCTUP ? 2 : 1;
             break;
-        }
         default:
             pg = page_of_button(b);
             if (pg < 0)
@@ -2240,6 +2286,20 @@ static void buttons_in(uint32_t btn)
         undo_snapshot();
         cmd(C_MUTATE, 0, 0, 0.35f, 0);
         app_say("Mutate", "a nudge to everything");
+    }
+    if (ui.oct_combo && (up & oct_mask)) {
+        if (ui.seq_recording) {
+            cmd(C_SEQ_REC, ui.seq_mask, 0, 0.0f, 0);
+            ui.seq_recording = 0;
+            { char msg[32], n[8]; int_text(ui.seq_count, n); text_cpy(msg, "Recorded ", sizeof msg); text_cat(msg, n); text_cat(msg, " notes"); app_say("Sequence", msg); }
+        }
+        if (!(btn & oct_mask)) { ui.oct_combo = 0; ui.seq_mask = 0; }
+    } else if (!ui.oct_combo && (up & oct_mask) && ui.oct_pending) {
+        int pending = ui.oct_pending; ui.oct_pending = 0;
+        if (ui.save_t || (btn & (1u << B_SAVE))) {
+            ui.save_used = 1;
+            if (pending == 2) keep_settings();
+        } else oct_step(pending == 2 ? B_OCTUP : B_OCTDN);
     }
     if (up >> B_REC & 1u) {
         if (!ui.rec_used) {
@@ -3117,6 +3177,15 @@ static int FN(int sl) \
         for (k = 0; k < KNOB_WP; k++) o.kpath[i][k] = pbuf.kpath[i][k]; \
         for (k = 0; k < NSCENE; k++) o.scene[k][i] = pbuf.scene[k][i]; \
     } \
+    for (i = 0; i < 2; i++) { \
+        int id = i ? P_G2_FUNC : P_G1_FUNC; \
+        int ix = (int)(pbuf.p[id] * (float)NUM_GENS); if (ix >= NUM_GENS_OLD) ix = NUM_GENS_OLD - 1; \
+        o.p[id] = ((float)ix + .5f) / (float)NUM_GENS_OLD; \
+        for (k = 0; k < NSCENE; k++) { \
+            int si = (int)((float)pbuf.scene[k][id] * (1.f / 65535.f) * (float)NUM_GENS); if (si >= NUM_GENS_OLD) si = NUM_GENS_OLD - 1; \
+            o.scene[k][id] = (uint16_t)((((float)si + .5f) / (float)NUM_GENS_OLD) * 65535.f + .5f); \
+        } \
+    } \
     memcpy(o.slot, pbuf.slot, sizeof o.slot); \
     for (k = 0; k < MOD_SLOTS; k++) \
         if (o.slot[k].dst >= NUM_PARAMS) o.slot[k].dst = (uint8_t)(o.slot[k].dst - NUM_PARAMS + (NP)); \
@@ -3307,6 +3376,10 @@ int app_expect(const char *what, int *got)
         *got = (int)(S.target[P_G1_FUNC] * (float)NUM_GENS);
     else if (!strcmp(what, "gen2"))
         *got = (int)(S.target[P_G2_FUNC] * (float)NUM_GENS);
+    else if (!strcmp(what, "seq1"))
+        *got = S.layer[0].g.seq_len;
+    else if (!strcmp(what, "seq2"))
+        *got = S.layer[1].g.seq_len;
     else if (!strcmp(what, "drums_on"))
         *got = pint(&S, P_DR_ON);
     else if (!strcmp(what, "drum_hits"))            /* the drums hit since the last ask: 1 if any */

@@ -470,6 +470,27 @@ expect keys_to 1
 turn K1 -1
 wait 300
 expect keys_to 0
+# Sequence V1: with Keys play on Layer 1, hold OCT+ and OCT- and play three notes.
+press OCT+
+wait 30
+press OCT-
+wait 30
+key 12 down 100
+wait 30
+key 12 up
+key 14 down 100
+wait 30
+key 14 up
+key 16 down 100
+wait 30
+key 16 up
+release OCT+
+wait 30
+release OCT-
+wait 100
+expect seq1 3
+expect seq2 0
+expect oct 0
 # patches: SAVE + key stores, HOME + key loads (with its scenes)
 tap HOME
 wait 40
