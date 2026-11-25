@@ -1,5 +1,6 @@
 # MANIFOLD: a generative resonator-bank instrument for the M-VAVE FM-1, on fm1-base (tools/build.py)
 name = "MANIFOLD"
+vendored = ["fm1-base/"]    # nested fm1-base checkout; don't audit it as MANIFOLD application code
 id_prefix = "FM-1_63"          # package identity: dev FM-1_6300, releases FM-1_63XXYYZZ
 usb_manufacturer = "fm1-base"
 usb_product = "MANIFOLD FM-1"
