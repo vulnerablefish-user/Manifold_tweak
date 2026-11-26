@@ -1080,6 +1080,16 @@ void synth_mutate(Synth *s, float amount) {
 
 void synth_set_param(Synth *s, int id, float v) {
     if (v < 0) v = 0; if (v > 1) v = 1;
+
+    if (id == P_G1_FUNC || id == P_G2_FUNC) {
+        int old_fn = (int)(s->base[id] * (float)NUM_GENS);
+        int new_fn = (int)(v * (float)NUM_GENS);
+        if (old_fn != GEN_SEQUENCE && new_fn == GEN_SEQUENCE) {
+            int bid = id == P_G1_FUNC ? P_G1_B : P_G2_B;
+            s->base[bid] = s->target[bid] = s->mod[bid] = 0.f;
+        }
+    }
+
     s->base[id] = s->target[id] = v;
     if (g_param_meta[id].structural) { s->rebuild_pending = 1; s->duck_tgt = 0.f; }
 }

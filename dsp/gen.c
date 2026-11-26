@@ -79,7 +79,7 @@ float grate_value(int r) { return GRATE_V[r < 0 ? 0 : r >= NUM_GRATES ? NUM_GRAT
 static const char *const AB_N[NUM_GENS][2] = {
     {"Ratio", "Phase"}, {"Span", "Contour"}, {"Coupling", "Spread"}, {"Chaos", "Zoom"}, {"Figure", "Answer"},
     {"Detail", "Density"}, {"Angle", "Bumper"}, {"Wells", "Energy"}, {"Turn", "Stride"},
-    {"Notes", "Swell"}, {"Life", "Wear"}, {"Progression", "Voicing"}, {"Unused", "Unused"}};
+    {"Notes", "Swell"}, {"Life", "Wear"}, {"Progression", "Voicing"}, {"Unused", "Drum trigger"}};
 const char *gen_ab_name(int g, int which) { return g >= 0 && g < NUM_GENS ? AB_N[g][which & 1] : "?"; }
 
 static const float ORBIT_R[8] = {1.f, 2.f, 1.5f, 4.f / 3, 1.25f, 5.f / 3, 3.f, 2.5f};
@@ -102,7 +102,16 @@ void gen_ab_text(int g, int which, float x, char *b, int len) {
     case GEN_LORENZ: if (!which) { int r = (int)(20.f + 30.f * x + .5f); snprintf(b, len, "rho %d", r); return; } break;
     case GEN_GRAVITY: if (!which) { int w = 1 + shape_idx(x, 3); snprintf(b, len, w == 1 ? "The ding" : w == 2 ? "Ding and fifth" : "Ding, fifth, third"); return; } break;
     case GEN_BILLIARD: if (!which) { snprintf(b, len, "%d deg", (int)(x * 180.f + .5f)); return; } break;
-    case GEN_SEQUENCE: snprintf(b, len, "Unused"); return;
+        case GEN_SEQUENCE:
+        if (!which) { snprintf(b, len, "Unused"); return; }
+        {
+            static const char *const DRUMS[] = {"None", "Kick", "Snare", "Hat", "Tom"};
+            int sel = (int)(x * 4.f + .5f);
+            if (sel < 0) sel = 0;
+            if (sel > 4) sel = 4;
+            snprintf(b, len, "%s", DRUMS[sel]);
+            return;
+        }
     default: break;
     }
     snprintf(b, len, "%d%%", pc);
