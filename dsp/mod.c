@@ -174,7 +174,9 @@ DSP_CTL void mod_apply(Synth *s) {
                 ko = kv * (k == 2 ? ksc2 : 1.f / 127.f);
             }
         }
-        float v = g_param_meta[i].moddable ? s->mod[i] + ko : s->base[i];
+        int seq_b = (i == P_G1_B && pint(s, P_G1_FUNC) == GEN_SEQUENCE)
+                 || (i == P_G2_B && pint(s, P_G2_FUNC) == GEN_SEQUENCE);
+        float v = seq_b ? s->base[i] : (g_param_meta[i].moddable ? s->mod[i] + ko : s->base[i]);
         v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
         s->mod[i] = v;
         if (v != s->last_mod[i]) param_cache(s, i);   /* only what moved pays for its mapping */

@@ -1064,7 +1064,9 @@ void synth_mutate(Synth *s, float amount) {
     uint32_t *r = &s->rng;
     for (int i = 0; i < NUM_PARAMS; i++) {
         const ParamMeta *m = &g_param_meta[i];
-        if (s->locked[m->section] || m->structural) continue;
+        if ((i == P_G1_B && pint(s, P_G1_FUNC) == GEN_SEQUENCE)
+            || (i == P_G2_B && pint(s, P_G2_FUNC) == GEN_SEQUENCE)
+            || s->locked[m->section] || m->structural) continue;
         if (m->curve == CURVE_DISC) {
             if (frand(r) < amount * .15f && m->rhi > m->rlo) s->target[i] = roll_one(m, r);
             continue;
