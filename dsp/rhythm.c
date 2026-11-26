@@ -266,27 +266,37 @@ DSP_CTL static void pat_tick(Synth *s, float dx) {
         }
     }
 }
-/* the tick's hits: the mutes (a drum that plays mutes its target this tick; kick, snare, tom, hat in that order), then
-   the drums */
+/* the tick's hits: the mutes (a drum that plays mutes its target this tick; kick, snare, tom, hat in that order),
+   then the drums */
 DSP_CTL static void cand_flush(Synth *s) {
     static const int8_t ORD[NUM_DRUMS] = {0, 1, 3, 2};
     uint8_t gone[NCAND] = {0};
+
     for (int k = 0; k < NUM_DRUMS; k++) {
         int d = ORD[k], tgt = pint(s, P_D1_MUTE + d), plays = 0;
-        if (tgt == PMUTE_NONE) continue;
-        for (int c = 0; c < ncand; c++) if (!gone[c] && cand[c].d == d) plays = 1;
-        if (!plays) continue;
-        for (int c = 0; c < ncand; c++) {
+        if (tgt == PMUTE_NONE) continue;        for (int c = 0; c < ncand; c++)
+            if (!gone[c] && cand[c].d == d) plays = 1;
+        if (!plays) continue;        for (int c = 0; c < ncand; c++) {
             if (gone[c] || cand[c].d == d) continue;
-            if (tgt == PMUTE_LINEAR ? cand[c].lin : cand[c].d == tgt - PMUTE_KICK) gone[c] = 1;
+            if (tgt == PMUTE_LINEAR ? cand[c].lin : cand[c].d == tgt - PMUTE_KICK)
+                gone[c] = 1;
         }
     }
-    for (int c = 0; c < ncand; c++) if (!gone[c]) drums_trigger(s, cand[c].d, -1, cand[c].v, cand[c].t);
+
+    for (int c = 0; c < ncand; c++) {
+        if (gone[c]) continue;
+        int d = cand[c].d;
+        if (d >= 0 && d < 4 && s->meter.seq_hits[d] < 255)
+            s->meter.seq_hits[d]++;
+        drums_trigger(s, d, -1, cand[c].v, cand[c].t);
+    }
+
     ncand = 0;
 }
 
 DSP_CTL void rhythm_tick(Synth *s, float dt) {
     Rhythm *m = &s->meter;
+    for (int d = 0; d < 4; d++) m->seq_hits[d] = 0;
     m->beats = 4.f;
     m->bar_sec = m->beats * 60.f / pval(s, P_TEMPO);
     float dx = 0.f;

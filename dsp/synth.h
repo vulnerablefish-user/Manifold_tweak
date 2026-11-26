@@ -289,6 +289,7 @@ typedef struct {
     float tired[4];                /* Select's feedback: how lately each drum played */
     uint32_t count;                /* Count: events since the strongest */
     uint32_t nev;                  /* events so far */
+    uint8_t seq_hits[4];           /* surviving rhythm hits this tick: kick, snare, hat, tom */
     float ev_s;                    /* the last event's strength (the screen) */
     float ev_flash;                /* ... and its light */
     float lk[4], lkm;              /* Lock: each drum's oscillator phase (cycles), the master's */
