@@ -268,7 +268,7 @@ DSP_CTL static void pat_tick(Synth *s, float dx) {
 }
 /* the tick's hits: the mutes (a drum that plays mutes its target this tick; kick, snare, tom, hat in that order),
    then the drums */
-DSP_CTL static void cand_flush(Synth *s) {
+DSP_CTL static void cand_flush(Synth *s, int audio_on) {
     static const int8_t ORD[NUM_DRUMS] = {0, 1, 3, 2};
     uint8_t gone[NCAND] = {0};
 
@@ -288,7 +288,8 @@ DSP_CTL static void cand_flush(Synth *s) {
         int d = cand[c].d;
         if (d >= 0 && d < 4 && s->meter.seq_hits[d] < 255)
             s->meter.seq_hits[d]++;
-        drums_trigger(s, d, -1, cand[c].v, cand[c].t);
+        if (audio_on)
+            drums_trigger(s, d, -1, cand[c].v, cand[c].t);
     }
 
     ncand = 0;
@@ -315,11 +316,24 @@ DSP_CTL void rhythm_tick(Synth *s, float dt) {
     m->R = rhythm_R(s, m->tau) * m->top;
     m->Rn = m->top > 1e-6f ? m->R / m->top : 0.f;
     m->ev_flash *= .95f;
-    int on = pint(s, P_DR_ON) && s->transport;
+    int audio_on = pint(s, P_DR_ON) && s->transport;
+
+    int seq_listen = 0;
+    if (pint(s, P_G1_FUNC) == GEN_SEQUENCE &&
+        (int)(pnorm(s, P_G1_B) * 4.f + .5f) > 0) seq_listen = 1;
+    if (pint(s, P_G2_FUNC) == GEN_SEQUENCE &&
+        (int)(pnorm(s, P_G2_B) * 4.f + .5f) > 0) seq_listen = 1;
+
+    int event_run = s->transport && (audio_on || seq_listen);
+
     ncand = 0;
-    if (on && dx > 0.f) pat_tick(s, dx);
-    if (pint(s, P_RH_ENGINE) == RH_LOCK) { lock_tick(s, dx, on); cand_flush(s); return; }
-    if (dx <= 0.f) { cand_flush(s); return; }
+    if (event_run && dx > 0.f) pat_tick(s, dx);
+    if (pint(s, P_RH_ENGINE) == RH_LOCK) {
+        lock_tick(s, dx, event_run);
+        cand_flush(s, audio_on);
+        return;
+    }
+    if (dx <= 0.f) { cand_flush(s, audio_on); return; }
     /* an event: R peaked at the tick before (R1 above both neighbours) and over the threshold. A parabola through
        the three values puts the peak within the tick; the hit lands a fixed 1.5 ticks (96 samples) after it */
     if (m->R1 > m->R && m->R1 >= m->R2 && m->R1 > th1) {
@@ -328,7 +342,10 @@ DSP_CTL void rhythm_tick(Synth *s, float dt) {
         float st = fclamp((pk - th1) / (m->top - th1 + 1e-6f), 0.f, 1.f);
         int delay = (int)((float)(SUB / 2) + (float)SUB * fclamp(off, -.5f, .5f));
         m->nev++; m->ev_s = st; m->ev_flash = 1.f;
-        if (on) { if (pint(s, P_RH_ASSIGN) == RH_COUNT) assign_count(s, st, delay); else assign_select(s, st, delay); }
+        if (event_run) {
+            if (pint(s, P_RH_ASSIGN) == RH_COUNT) assign_count(s, st, delay);
+            else assign_select(s, st, delay);
+        }
     }
-    cand_flush(s);
+    cand_flush(s, audio_on);
 }
