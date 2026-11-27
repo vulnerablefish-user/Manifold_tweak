@@ -90,8 +90,9 @@ jobs:
           echo "AC79_SDK=$SDK" >> "$GITHUB_ENV"
 
       - name: Build FM-1 firmware package
+        working-directory: fm1-base
         run: |
-          python fm1-base/tools/build.py . \
+          python tools/build.py .. \
             --release 1.0.8-pitch1 \
             --sdk "$AC79_SDK"
 
