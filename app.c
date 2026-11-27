@@ -1304,6 +1304,7 @@ static struct {
     uint32_t btn, keys;
     uint32_t rec_t, home_t, save_t, play_t, rec_tap;   /* rec_tap: a REC tap waiting to see if a second follows */
     uint8_t rec_used, home_used, save_used, play_used;
+    uint8_t oct_pending, oct_combo;     /* defer OCT +/- until release; both together form a gesture */
     char msg[2][40];
     uint32_t msg_until;
     uint8_t redraw;
@@ -2198,10 +2199,27 @@ static void bank_step(int d)             /* OCT - / + or K1 on the Patches page 
     app_say(BANK_N[bank], "SAVE + key: save   /   HOME + key: load");
 }
 
+static void oct_step(int b)             /* a single OCT press, applied on release */
+{
+    char t[8];
+    if (ui.page == PG_PATCH) { bank_step(b == B_OCTUP ? 1 : -1); return; }
+    set.oct = (int8_t)clamp(set.oct + (b == B_OCTUP ? 1 : -1), -3, 3);
+    set_dirty = 1;
+    int_text(set.oct, t);
+    app_say("Key octave", t);
+}
+
 static void buttons_in(uint32_t btn)
 {
     uint32_t b, now = plat_ms() | 1u;
     uint32_t down = btn & ~ui.btn, up = ui.btn & ~btn;
+    uint32_t oct_mask = (1u << B_OCTDN) | (1u << B_OCTUP);
+    /* Recognise the pair before processing either individual button. */
+    if (!ui.oct_combo && !(btn & (1u << B_SAVE)) &&
+        (btn & oct_mask) == oct_mask) {
+        ui.oct_combo = 1;
+        ui.oct_pending = 0;
+    }
     ui.btn = btn;
     for (b = 0; b < NB; b++) {
         int pg;
@@ -2221,25 +2239,15 @@ static void buttons_in(uint32_t btn)
             break;
         case B_SAVE: ui.save_t = now; ui.save_used = 0; break;
         case B_PLAY: ui.play_t = now; ui.play_used = 0; ui.redraw = 1; break;
-        case B_OCTDN: case B_OCTUP: {
-            char t[8];
-            if (ui.save_t) {                         /* SAVE + OCT+: keep the settings; SAVE + OCT-: nothing (a slip
-                                                      * never moves the keys) */
+        case B_OCTDN: case B_OCTUP:
+            if (ui.oct_combo) break;
+            if (ui.save_t || (btn & (1u << B_SAVE))) {
                 ui.save_used = 1;
-                if (b == B_OCTUP)
-                    keep_settings();
+                if (b == B_OCTUP) keep_settings();
                 break;
             }
-            if (ui.page == PG_PATCH) {               /* the Patches page: OCT chooses the bank */
-                bank_step(b == B_OCTUP ? 1 : -1);
-                break;
-            }
-            set.oct = (int8_t)clamp(set.oct + (b == B_OCTUP ? 1 : -1), -3, 3);
-            set_dirty = 1;
-            int_text(set.oct, t);
-            app_say("Key octave", t);
+            ui.oct_pending = b == B_OCTUP ? 2 : 1;
             break;
-        }
         default:
             pg = page_of_button(b);
             if (pg < 0)
@@ -2307,6 +2315,17 @@ static void buttons_in(uint32_t btn)
         }
         ui.play_t = 0;
         ui.redraw = 1;
+    }
+    /* A pair ends on the first release, but stays latched until both are up. */
+    if (ui.oct_combo && (up & oct_mask)) {
+        if (!(btn & oct_mask)) ui.oct_combo = 0;
+    } else if (!ui.oct_combo && (up & oct_mask) && ui.oct_pending) {
+        int pending = ui.oct_pending;
+        ui.oct_pending = 0;
+        if (ui.save_t || (btn & (1u << B_SAVE))) {
+            ui.save_used = 1;
+            if (pending == 2) keep_settings();
+        } else oct_step(pending == 2 ? B_OCTUP : B_OCTDN);
     }
 }
 
