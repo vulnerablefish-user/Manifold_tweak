@@ -1058,3 +1058,11 @@ index 24011e2..517b6ae 100755
      if os.environ.get("FM1B_POOL_SPARE", "").isdigit():   # an app's own build for itself (a demo build with mirror)
          spare = int(os.environ["FM1B_POOL_SPARE"])
      notes.append(f"image {len(img)} B; RAM .data+.bss {bss} B of {ram}; pool {pool} B of {pool_max}")
+@@ -918,6 +919,6 @@ def mmio_check():
+     errors = []
+     skip = CONF.get("mmio_skip", [])
+     files = [*(SRC / "device").glob("*.[ch]"), *(SRC / "include").glob("*.h"), *(SRC / "lib").glob("*.[ch]"),
+-             *[f for f in APP.rglob("*.[ch]") if "build" not in f.relative_to(APP).parts
++             *[f for f in APP.rglob("*.[ch]") if SRC not in f.parents and "build" not in f.relative_to(APP).parts
+                and not any(str(f.relative_to(APP)).startswith(v) for v in CONF.get("vendored", []))]]
+     for f in sorted(files):
