@@ -539,8 +539,8 @@ index 06002a2..b3c1c5f 100644
                                                         * boot_pack packs it; build.py checks the slot */
 -    RAMTEXT (rwx): ORIGIN = 0x01C00000, LENGTH = 0x8000
 -    RAM    (rwx) : ORIGIN = 0x01C08000, LENGTH = 96K
-+    RAMTEXT (rwx): ORIGIN = 0x01C00000, LENGTH = 0xBC00   /* (was 0x8000: MANIFOLD's control tick runs from RAM too) */
-+    RAM    (rwx) : ORIGIN = 0x01C0BC00, LENGTH = 81K      /* (was 0x01C08000, 96K) */
++    RAMTEXT (rwx): ORIGIN = 0x01C00000, LENGTH = 0xC000   /* (was 0x8000: MANIFOLD's control tick runs from RAM too) */
++    RAM    (rwx) : ORIGIN = 0x01C0C000, LENGTH = 80K      /* (was 0x01C08000, 96K) */
      POOL   (rw)  : ORIGIN = 0x01C20000, LENGTH = 0x54000
      NOINIT (rw)  : ORIGIN = 0x01C7C000, LENGTH = 0x3D50
  }
@@ -1064,7 +1064,7 @@ index 24011e2..95e7171 100755
              errors.append(f"ble_stack = own links JieLi's Bluetooth code: {bt}")
          rf = re.search(r"^([0-9a-f]+) .*\sfm1_rf_burst_run$", syms, re.M)
 -        if not rf or not 0x01C00000 <= int(rf.group(1), 16) < 0x01C08000:
-+        if not rf or not 0x01C00000 <= int(rf.group(1), 16) < 0x01C0BC00:
++        if not rf or not 0x01C00000 <= int(rf.group(1), 16) < 0x01C0C000:
              errors.append("fm1_rf_burst_run is not in .ram_text (the radio's crystal ramp must run from RAM)")
          else:
              notes.append("own Bluetooth stack: nothing of JieLi's linked, the radio's ramp in RAM")
@@ -1073,10 +1073,10 @@ index 24011e2..95e7171 100755
          mm = re.search(r"^([0-9a-f]+) .*\s" + name + r"$", syms, re.M)
          return int(mm.group(1), 16) if mm else 0
 -    bss = sym("_bss_end") - 0x01C08000
-+    bss = sym("_bss_end") - (0x01C08000 if WIFI else 0x01C0BC00)   # (app.ld: the RAM code window is 47 KB)
++    bss = sym("_bss_end") - (0x01C08000 if WIFI else 0x01C0C000)   # (app.ld: the RAM code window is 48 KB)
      pool = sym("_pool_end") - sym("_pool_start")
 -    ram, pool_max, spare = (128 * 1024, 0x4C000, 2048) if WIFI else (96 * 1024, 0x54000, 8192)   # (app_wifi.ld)
-+    ram, pool_max, spare = (128 * 1024, 0x4C000, 2048) if WIFI else (81 * 1024, 0x54000, 8192)   # (app_wifi.ld)
++    ram, pool_max, spare = (128 * 1024, 0x4C000, 2048) if WIFI else (80 * 1024, 0x54000, 8192)   # (app_wifi.ld)
      if os.environ.get("FM1B_POOL_SPARE", "").isdigit():   # an app's own build for itself (a demo build with mirror)
          spare = int(os.environ["FM1B_POOL_SPARE"])
      notes.append(f"image {len(img)} B; RAM .data+.bss {bss} B of {ram}; pool {pool} B of {pool_max}")
