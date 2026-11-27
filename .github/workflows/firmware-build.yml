@@ -1,0 +1,116 @@
+
+name: MANIFOLD FM-1 Firmware Build
+
+on:
+  push:
+    branches:
+      - pitch-vocabulary-108
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out MANIFOLD
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential curl xz-utils libfribidi0
+
+          python -m pip install --upgrade pip
+          python -m pip install Pillow
+
+          python -c "from PIL import features; print('RAQM:', features.check('raqm')); assert features.check('raqm')"
+
+      - name: Fetch fm1-base and apply MANIFOLD patches
+        run: |
+          git clone https://github.com/charlesvestal/fm1-base.git fm1-base
+          git -C fm1-base checkout 2d8ed74
+          git -C fm1-base submodule update --init --recursive
+          git -C fm1-base/bsp checkout 773b0b9
+
+          git -C fm1-base apply ../patches/fm1-base.patch
+          git -C fm1-base/bsp apply ../../patches/felucca-bsp.patch
+
+      - name: Download and verify JieLi toolchain
+        run: |
+          ARCHIVE="$RUNNER_TEMP/jieli-linux-toolchains-20250324.1.tar.xz"
+
+          curl -fL --retry 3 \
+            -o "$ARCHIVE" \
+            https://jl-update.oss-cn-shenzhen.aliyuncs.com/jieli-linux-toolchains-20250324.1.tar.xz
+
+          echo "f686586bcfb45e0f0bb27fd2b39c7a7f313cb4f0e88a66a14da621ffa8225958  $ARCHIVE" | sha256sum --check
+
+          mkdir -p "$HOME/.jieli"
+          tar -xJf "$ARCHIVE" -C "$HOME/.jieli"
+
+          TC_DIR="$(find "$HOME/.jieli" -mindepth 1 -maxdepth 1 -type d -name 'jieli-linux-toolchains-*' | head -n 1)"
+
+          test -x "$TC_DIR/pi32v2/bin/clang"
+
+          echo "JIELI_TOOLCHAIN=$TC_DIR" >> "$GITHUB_ENV"
+
+          "$TC_DIR/pi32v2/bin/clang" --version
+
+      - name: Download and verify JieLi SDK files
+        run: |
+          SDK="$RUNNER_TEMP/fw-AC79_AIoT_SDK"
+          DEST="$SDK/cpu/wl82/tools"
+          TAG="AC79NN_SDK_V1.2.1_2023-12-13"
+
+          mkdir -p "$DEST/cfg"
+
+          BASE="https://raw.githubusercontent.com/amitv87/fw-AC79_AIoT_SDK/$TAG/cpu/wl82/tools"
+
+          curl -fL --retry 3 -o "$DEST/uboot.boot" "$BASE/uboot.boot"
+          curl -fL --retry 3 -o "$DEST/cfg_tool.bin" "$BASE/cfg_tool.bin"
+          curl -fL --retry 3 -o "$DEST/cfg/eq_cfg_hw.bin" "$BASE/cfg/eq_cfg_hw.bin"
+
+          cd "$DEST"
+
+          printf '%s  %s\n' \
+            '4e3b4c220dc96641cb5a723f41e68ce41d5261ae9434bb33fbd7f2c59976ded4' 'uboot.boot' \
+            '276579954f076886a6a7694f65dc71c034a63a2c204b76749065c0ac7b010d1b' 'cfg_tool.bin' \
+            '41167491bffed4651750719c973d2758adeb9021a5670d02d6a53c85ed80ea7d' 'cfg/eq_cfg_hw.bin' \
+            | sha256sum --check
+
+          echo "AC79_SDK=$SDK" >> "$GITHUB_ENV"
+
+      - name: Build FM-1 firmware package
+        run: |
+          python fm1-base/tools/build.py . \
+            --release 1.0.8-pitch1 \
+            --sdk "$AC79_SDK"
+
+      - name: Verify firmware package
+        run: |
+          test -s build/manifold-1.0.8-pitch1.fwsc
+
+          sha256sum build/manifold-1.0.8-pitch1.fwsc \
+            > build/SHA256SUMS
+
+          ls -lh build/manifold-1.0.8-pitch1.fwsc
+          cat build/SHA256SUMS
+
+      - name: Upload FM-1 firmware
+        uses: actions/upload-artifact@v6
+        with:
+          name: manifold-pitch-vocabulary-fwsc
+          path: |
+            build/manifold-1.0.8-pitch1.fwsc
+            build/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
