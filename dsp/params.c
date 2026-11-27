@@ -1188,6 +1188,8 @@ int synth_roll_step(Synth *s) {                 /* one part; 1 while a roll is u
 
 static void roll_commit(Synth *s, uint32_t seed, float morph_seconds) {
     int structural = 0;
+    if (s->base[P_SCALE] != s->target[P_SCALE] || s->base[P_ROTATE] != s->target[P_ROTATE] || s->base[P_OCTAVES] != s->target[P_OCTAVES])
+        synth_vocab_clear(s);
     for (int i = 0; i < NUM_PARAMS; i++) {
         const ParamMeta *m = &g_param_meta[i];
         if (m->structural) { if (s->base[i] != s->target[i]) structural = 1; }
@@ -1227,8 +1229,18 @@ void synth_mutate(Synth *s, float amount) {
     s->morphing = 1;
 }
 
+void synth_vocab_clear(Synth *s) {
+    for (int l = 0; l < NUM_LAYERS; l++) {
+        s->layer[l].vocab_mask = 0;
+        s->layer[l].vocab_on = 0;
+    }
+    s->vocab_generation++;
+}
+
 void synth_set_param(Synth *s, int id, float v) {
     if (v < 0) v = 0; if (v > 1) v = 1;
+    if ((id == P_SCALE || id == P_ROTATE || id == P_OCTAVES) && s->base[id] != v)
+        synth_vocab_clear(s);
     s->base[id] = s->target[id] = v;
     if (g_param_meta[id].structural) { s->rebuild_pending = 1; s->duck_tgt = 0.f; }
 }

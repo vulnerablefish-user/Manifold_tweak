@@ -473,6 +473,8 @@ typedef struct {
     float   eavg;                  /* the layer's loudness energy (sum of a_n^2), averaged */
     int     n_voices;              /* rendered this block */
     int     n_osc;                 /* oscillators rendered this block (the profiler, the tests) */
+    uint32_t vocab_mask;           /* notes allowed to the motion generator */
+    uint8_t vocab_on;              /* enforce the vocabulary mask */
 } Layer;
 
 /* ------------------------------------------------------------------ */
@@ -508,6 +510,7 @@ typedef struct Synth {
     float l2_l[SUB], l2_r[SUB];/* layer 2's sub-block (it may be rendered on the second core) */
 
     float duck, duck_tgt; int rebuild_pending;
+    volatile uint32_t vocab_generation;
     /* runtime caps the profiler page sets */
     uint8_t cap_pad_voices;    /* layer 2 voices, 4..MAX_VOICES */
     uint8_t cap_nodes;         /* layer 1 voices, 4..MAX_VOICES */
@@ -543,6 +546,7 @@ void synth_randomize(Synth *s, uint32_t seed, float morph_seconds);
 void synth_mutate(Synth *s, float amount);
 void synth_roll_sections(Synth *s, uint32_t seed, float morph_seconds, uint32_t mask);   /* bit i: Section i */
 void synth_set_param(Synth *s, int id, float norm);
+void synth_vocab_clear(Synth *s);
 void synth_set_macro(Synth *s, int m, float v);
 void synth_describe(Synth *s, char *buf, int len);
 void synth_set_style(Synth *s, int style);

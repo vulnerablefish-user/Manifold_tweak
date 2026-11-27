@@ -151,7 +151,7 @@ static volatile uint8_t scene_busy;
 
 /* ------------------------------------------------------------------ the queue --- */
 enum { C_PARAM, C_MACRO, C_ROLL, C_MUTATE, C_STYLE, C_NOTE, C_TRANSPORT, C_CAP, C_LOAD, C_LOCK, C_PANIC, C_SCENE,
-       C_LAYER, C_MUTESEQ, C_KEYS, C_SLOT };
+       C_LAYER, C_MUTESEQ, C_KEYS, C_SLOT, C_VOCAB };
 enum { CAP_PAD, CAP_UNI, CAP_NODES, CAP_WSOS, CAP_FBST, CAP_CPU2, CAP_HARM };
 typedef struct { uint8_t op, a; uint16_t b; float f; uint32_t u; } cmd_t;
 #define QN 64u
@@ -212,6 +212,12 @@ static void drain(void)                  /* audio interrupt, start of a block */
         case C_LAYER: S.lay_t[c->a & 1u] = c->f; break;
         case C_MUTESEQ: S.mute_seq = c->a; break;
         case C_KEYS: S.keys_to = c->a; break;
+        case C_VOCAB:
+            if (c->a < NUM_LAYERS) {
+                S.layer[c->a].vocab_mask = c->u;
+                S.layer[c->a].vocab_on = (uint8_t)c->b;
+            }
+            break;
         case C_SLOT:                     /* a matrix route: a the route, b source << 8 | destination, f the depth */
             if (c->a < MOD_SLOTS) {
                 ModSlot *m = &S.slot[c->a];
@@ -222,6 +228,8 @@ static void drain(void)                  /* audio interrupt, start of a block */
             break;
         case C_LOAD: {
             int i, structural = 0;
+            if (S.base[P_SCALE] != pbuf.p[P_SCALE] || S.base[P_ROTATE] != pbuf.p[P_ROTATE] || S.base[P_OCTAVES] != pbuf.p[P_OCTAVES])
+                synth_vocab_clear(&S);
             for (i = 0; i < NUM_PARAMS; i++) {
                 if (g_param_meta[i].structural && S.base[i] != pbuf.p[i])
                     structural = 1;
@@ -1314,6 +1322,7 @@ static struct {
     uint32_t edit_t[4];
     /* performance */
     uint8_t latch, mute[4], fill, keys_prev;
+    uint8_t vocab_recording, vocab_targets, vocab_full;
     uint8_t roll_pend;                  /* 1: a style roll waits for PRESET to rest; 2: a seed for ALGO */
     uint32_t roll_t, seed_pend;
     float fill_dens, fill_rat;
@@ -1329,6 +1338,10 @@ static struct {
     uint32_t pf_last[PROF_N], pf_blocks_last, pf_t;
     uint32_t pf_us[PROF_N], pf_peak_us, pf_peak_hold, pf_cpu;
 } ui;
+
+#define VOCAB_MAX 16
+static uint8_t vocab_notes[NUM_LAYERS][VOCAB_MAX];
+static uint8_t vocab_count[NUM_LAYERS];
 
 static uint32_t rng_ui = 0x1234567u;
 static uint32_t rnd(void)
@@ -1354,6 +1367,74 @@ void app_say(const char *a, const char *b)
             text_cat(t, ui.msg[1]);
         }
         ann_say(t, 0, ANN_NOW);
+    }
+}
+
+static void vocab_note(int nd)
+{
+    if (!ui.vocab_recording || nd < 0 || nd >= MAX_NODES)
+        return;
+    for (int l = 0; l < NUM_LAYERS; l++) {
+        uint8_t bit = (uint8_t)(1u << l);
+        if (!(ui.vocab_targets & bit))
+            continue;
+        if (vocab_count[l] < VOCAB_MAX) {
+            vocab_notes[l][vocab_count[l]++] = (uint8_t)nd;
+        } else if (!(ui.vocab_full & bit)) {
+            ui.vocab_full |= bit;
+            app_say("Vocabulary full", l ? "Layer 2: 16 notes" : "Layer 1: 16 notes");
+        }
+    }
+}
+
+static void vocab_toggle(void)
+{
+    if (!ui.vocab_recording) {
+        uint8_t targets = set.keys_to == 3 ? 0 :
+                          set.keys_to == 2 ? 3 :
+                          set.keys_to < NUM_LAYERS ? (uint8_t)(1u << set.keys_to) : 0;
+        if (!targets) {
+            app_say("Pitch vocabulary", "Select a synth layer, not drums");
+            return;
+        }
+        if (q_w - q_r > QN - ((targets & 1u ? 1u : 0u) + (targets & 2u ? 1u : 0u))) {
+            app_say("Vocabulary", "Command queue busy");
+            return;
+        }
+        ui.vocab_targets = targets;
+        ui.vocab_full = 0;
+        for (int l = 0; l < NUM_LAYERS; l++) {
+            if (targets & (1u << l)) {
+                vocab_count[l] = 0;
+                if (!cmd(C_VOCAB, (uint32_t)l, 0, 0.0f, 0)) {
+                    app_say("Vocabulary", "Command queue busy");
+                    return;
+                }
+            }
+        }
+        ui.vocab_recording = 1;
+        app_say("Pitch vocabulary", targets == 3 ? "Recording both layers" :
+                targets == 1 ? "Recording Layer 1" : "Recording Layer 2");
+    } else {
+        int any_notes = 0;
+        if (q_w - q_r > QN - ((ui.vocab_targets & 1u ? 1u : 0u) + (ui.vocab_targets & 2u ? 1u : 0u))) {
+            app_say("Vocabulary", "Command queue busy");
+            return;
+        }
+        for (int l = 0; l < NUM_LAYERS; l++) {
+            if (ui.vocab_targets & (1u << l)) {
+                if (vocab_count[l]) any_notes = 1;
+                uint32_t mask = 0;
+                for (int i = 0; i < vocab_count[l]; i++)
+                    mask |= 1u << vocab_notes[l][i];
+                if (!cmd(C_VOCAB, (uint32_t)l, vocab_count[l] ? 1u : 0u, 0.0f, mask)) {
+                    app_say("Vocabulary", "Command queue busy");
+                    return;
+                }
+            }
+        }
+        ui.vocab_recording = 0;
+        app_say("Pitch vocabulary", any_notes ? "Vocabulary active" : "No notes recorded");
     }
 }
 
@@ -2151,7 +2232,8 @@ static void keys_in(uint32_t keys)
                 if (nd < 0 || S.build_req)
                     continue;
                 key_node[k] = (int8_t)nd;
-                cmd(C_NOTE, 1, (uint32_t)nd, (float)(v ? v : 100u) * (1.0f / 127.0f), 0);
+                if (cmd(C_NOTE, 1, (uint32_t)nd, (float)(v ? v : 100u) * (1.0f / 127.0f), 0))
+                    vocab_note(nd);
                 mo_key((int)k, nd, (int)(v ? v : 100u), 1);
                 if (ui.latch)
                     latched |= bit;
@@ -2219,6 +2301,7 @@ static void buttons_in(uint32_t btn)
         (btn & oct_mask) == oct_mask) {
         ui.oct_combo = 1;
         ui.oct_pending = 0;
+        vocab_toggle();
     }
     ui.btn = btn;
     for (b = 0; b < NB; b++) {
@@ -2786,7 +2869,10 @@ static void draw_home(void)
             float fl = 0.0f;
             int32_t w = text_w(&FONT_T, M[i]) + 8;
             if (i == 3) { int d; for (d = 0; d < NUM_DRUMS; d++) if (S.dr.flash[d] > fl) fl = S.dr.flash[d]; }
-            cv_rect(x, 90, w, 14, off ? C_LINE : fl > 0.5f ? C_HI : C_AMB);
+            int recording = i < NUM_LAYERS && ui.vocab_recording && (ui.vocab_targets & (1u << i));
+            int constrained = i < NUM_LAYERS && !recording && S.layer[i].vocab_on;
+            uint16_t colour = off ? C_LINE : recording ? ((plat_ms() / 250u) & 1u ? C_WHITE : C_HI) : constrained ? C_WHITE : fl > 0.5f ? C_HI : C_AMB;
+            cv_rect(x, 90, w, 14, colour);
             cv_text(x + 4, 91, &FONT_T, M[i], off ? C_DIM : C_BLACK);
             x += w + 4;
         }
@@ -3068,6 +3154,14 @@ void app_frame(void)
     }
     static uint32_t last_draw, last_bt;
     uint32_t now = plat_ms();
+    static uint32_t vocab_seen;
+    if (vocab_seen != S.vocab_generation) {
+        vocab_seen = S.vocab_generation;
+        memset(vocab_count, 0, sizeof vocab_count);
+        ui.vocab_recording = 0;
+        ui.vocab_targets = 0;
+        ui.vocab_full = 0;
+    }
     if (S.build_req) {                   /* the render is waiting: the rebuild, here */
         synth_build_now(&S);
         builds++;

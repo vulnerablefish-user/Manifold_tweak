@@ -602,7 +602,11 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
         case ENV_PASS: {                                      /* nearness to a note: it sounds as it passes through */
             SurfPt qp; surf_pt(s->eng.surface, qx, qy, &qp);
             float bd = 1e30f;                                 /* (the nearest note: the largest bump) */
-            for (int i = 0; i < N; i++) { float d2 = surf_d2(s->eng.surface, &qp, &s->eng.node[i]); if (d2 < bd) bd = d2; }
+            for (int i = 0; i < N; i++) {
+                if (L->vocab_on && !(L->vocab_mask & (1u << i))) continue;
+                float d2 = surf_d2(s->eng.surface, &qp, &s->eng.node[i]);
+                if (d2 < bd) bd = d2;
+            }
             float best = N > 0 ? fexp2(-bd * iS * 4.f * 1.4427f) : 0.f;
             e = powf_(best, .6f + 1.6f * C);
         } break;
@@ -632,6 +636,7 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
         if (amp <= 1e-5f) continue;
         SurfPt qp; surf_pt(s->eng.surface, qx, qy, &qp);
         for (int i = 0; i < N; i++) {
+            if (L->vocab_on && !(L->vocab_mask & (1u << i))) continue;
             float w = surf_d2(s->eng.surface, &qp, &s->eng.node[i]) * iR; if (w >= 1.f) continue;
             w = 1.f - w; g->u[i] += amp * w * w * s->eng.node[i].wt * g->gw[i];
         }
