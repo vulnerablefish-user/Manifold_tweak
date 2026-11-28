@@ -377,6 +377,7 @@ typedef struct {
     float ox[MAX_PTS], oy[MAX_PTS];/* the keys' pull on each point (continuous) */
     float eph[MAX_PTS];            /* envelope phase, cycles */
     float e[MAX_PTS];              /* envelope, 0..1 */
+    float em[MAX_PTS];             /* unrestricted motion envelope, 0..1 */
     float u[MAX_NODES];            /* drive: sum over points of envelope x proximity */
     float a[MAX_NODES];            /* loudness: the drive through the consonance gain, the voices' target */
     float upv[MAX_NODES];          /* last tick's drive (its slope ranks rising notes; rises are counted) */

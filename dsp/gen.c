@@ -496,7 +496,7 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
        seconds). While the transport runs, a held key also breathes with the layer's own envelope (half of it). */
     {
         float sf = 1.f - C, atk = .002f + 1.2f * sf * sf * sf, dec = .12f + 3.f * sf * sf, sus = .25f + .65f * sf, rel = .03f + 2.5f * sf * sf;
-        float breathe = env == ENV_HOLD || run < .5f ? 1.f : .5f + .5f * fclamp(g->e[0], 0.f, 1.f);
+        float breathe = env == ENV_HOLD || run < .5f ? 1.f : .5f + .5f * fclamp(g->em[0], 0.f, 1.f);
         float ka = 1.f - fexp2(-dt / (atk * .4f) * 1.442695f), kr = 1.f - fexp2(-dt / rel * 1.442695f), life = atk + 5.f * dec;
         for (int i = 0; i < N; i++) {
             float x = 0.f;
@@ -583,7 +583,7 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
         g->sm[j] += (g->spd[j] - g->sm[j]) * k2;
         g->hm[j] += (h - g->hm[j]) * k2; g->hv[j] += ((h - g->hm[j]) * (h - g->hm[j]) - g->hv[j]) * k2;
         /* the envelope, a function of the point's own continuous state */
-        float e;
+        float e, em;
         switch (env) {
         case ENV_PULSE: case ENV_SWELL: {
             /* its phase runs at Env rate (an exact ratio to the bar) and is held to the bar's own clock: after a
@@ -601,14 +601,16 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
         case ENV_SPEED: e = .5f + conf * (smooth01((g->spd[j] / (g->sm[j] + 1e-4f) - 1.f) * (.8f + 2.5f * C) + .5f) - .5f); break;
         case ENV_PASS: {                                      /* nearness to a note: it sounds as it passes through */
             SurfPt qp; surf_pt(s->eng.surface, qx, qy, &qp);
-            float bd = 1e30f;                                 /* (the nearest note: the largest bump) */
+            float bd = 1e30f, bv = 1e30f;
             for (int i = 0; i < N; i++) {
-                if (L->vocab_on && !(L->vocab_mask & (1u << i))) continue;
                 float d2 = surf_d2(s->eng.surface, &qp, &s->eng.node[i]);
                 if (d2 < bd) bd = d2;
+                if (!L->vocab_on || (L->vocab_mask & (1u << i))) if (d2 < bv) bv = d2;
             }
-            float best = N > 0 ? fexp2(-bd * iS * 4.f * 1.4427f) : 0.f;
-            e = powf_(best, .6f + 1.6f * C);
+            float best_all = N > 0 ? fexp2(-bd * iS * 4.f * 1.4427f) : 0.f;
+            float best_allowed = N > 0 ? fexp2(-bv * iS * 4.f * 1.4427f) : 0.f;
+            em = powf_(best_all, .6f + 1.6f * C);
+            e = powf_(best_allowed, .6f + 1.6f * C);
         } break;
         case ENV_HEIGHT: { float sd = sqrtf(g->hv[j]) + .02f; e = .5f + conf * (smooth01((h - g->hm[j]) / sd * (.35f + .6f * C) + .5f) - .5f); } break;
         case ENV_STREAM: {                                    /* the rhythm's stream itself; Spread delays it point by point */
@@ -624,12 +626,16 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
         } break;
         default: e = 1.f; break;
         }
+        if (env != ENV_PASS) em = e;
         /* Adds and Multiplies: the modulator's envelope (point j mod n) on this one's */
         if (is_car && (mroute == ROUTE_ADD || mroute == ROUTE_MUL)) {
-            float me = mg->e[j % (mg->npts > 0 ? mg->npts : 1)];
-            e = mroute == ROUTE_ADD ? e + depth * me : e * (1.f - depth + depth * me);
+            float me = mg->em[j % (mg->npts > 0 ? mg->npts : 1)];
+            if (mroute == ROUTE_ADD) { e += depth * me; em += depth * me; }
+            else { e *= 1.f - depth + depth * me; em *= 1.f - depth + depth * me; }
             if (e > 1.2f) e = 1.2f;
+            if (em > 1.2f) em = 1.2f;
         }
+        g->em[j] = em * run * g->mgn[j];
         g->e[j] = e * run * g->mgn[j];
         /* the drive: the envelope where the point is */
         float amp = is_mod ? 0.f : lvl * g->e[j] * accent;      /* a modulator does not sound */
@@ -643,7 +649,7 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
     }
     if (func == GEN_SWARM) for (int j = 0; j < npts; j++) { g->sx[j] = g->sw[j] - floorf(g->sw[j]); }
     g->key = key; g->la = A;
-    for (int j = npts; j < MAX_PTS; j++) g->e[j] = 0.f;
+    for (int j = npts; j < MAX_PTS; j++) g->e[j] = g->em[j] = 0.f;
 
     for (int i = 0; i < N; i++) {
         g->u[i] += g->kin[i];                                 /* the keys */

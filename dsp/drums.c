@@ -149,7 +149,7 @@ static int pick_node(const Synth *s, int l, float voice) {
         }
     }
     int jb = 0; float eb = -1.f;
-    for (int j = 0; j < g->npts; j++) if (g->e[j] > eb) { eb = g->e[j]; jb = j; }
+    for (int j = 0; j < g->npts; j++) if (g->em[j] > eb) { eb = g->em[j]; jb = j; }
     int bn = 0; float bd = 1e30f;
     SurfPt sp; DSP_FAR(surf_pt)(s->eng.surface, g->qx[jb], g->qy[jb], &sp);
     for (int i = 0; i < N; i++) { float dd = surf_d2(s->eng.surface, &sp, &s->eng.node[i]); if (dd < bd) { bd = dd; bn = i; } }
@@ -218,7 +218,7 @@ DSP_CTL void drums_tick(Synth *s, float dt) {
         int sh = pint(s, P_DR_SHAPE); float g = 1.f, e = .5f;
         if (sh != DSHAPE_NONE) {
             const GenSt *lg = &s->layer[sh - DSHAPE_L1].g; e = 0.f;
-            for (int j = 0; j < lg->npts; j++) if (lg->e[j] > e) e = lg->e[j];
+            for (int j = 0; j < lg->npts; j++) if (lg->em[j] > e) e = lg->em[j];
             e = fclamp(e, 0.f, 1.f);
             float dp = pval(s, P_DR_DEPTH); g = 1.f - dp + dp * e;
         }
@@ -235,7 +235,7 @@ DSP_CTL void drums_tick(Synth *s, float dt) {
             if (dens < .01f || src < DSRC_L1 || pint(s, P_D1_PAT + d) > 0) continue;   /* (a pattern: rhythm.c's) */
             const GenSt *g = &s->layer[src - DSRC_L1].g;
             int np = g->npts > 0 ? g->npts : 1, j = (int)(place * (float)(np - 1) + .5f);
-            float e = g->e[j], th = 1.f - .95f * dens;
+            float e = g->em[j], th = 1.f - .95f * dens;
             if (v->armed[0] && e > th) { queue(v, -1, (1.f - acc) + acc * fclamp(e, 0.f, 1.f), 0); v->armed[0] = 0; }
             else if (e < th - .12f) v->armed[0] = 1;
         }

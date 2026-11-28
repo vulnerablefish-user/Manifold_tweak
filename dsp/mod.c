@@ -137,7 +137,7 @@ DSP_CTL void mod_apply(Synth *s) {
     src[SRC_VEL] = s->last_vel;
     for (int l = 0; l < NUM_LAYERS; l++) {                    /* each motion: its loudest point's envelope */
         const GenSt *g = &s->layer[l].g; float e = 0.f;
-        for (int j = 0; j < g->npts; j++) if (g->e[j] > e) e = g->e[j];
+        for (int j = 0; j < g->npts; j++) if (g->em[j] > e) e = g->em[j];
         src[SRC_MOT1 + l] = e > 1.f ? 1.f : e;
     }
 
