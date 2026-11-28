@@ -217,6 +217,7 @@ static void drain(void)                  /* audio interrupt, start of a block */
                 S.layer[c->a].vocab_mask = c->u;
                 S.layer[c->a].vocab_count = c->b <= 16u ? (uint8_t)c->b : 0;
                 S.layer[c->a].vocab_on = S.layer[c->a].vocab_count != 0;
+                S.layer[c->a].vocab_revision++;
             }
             break;
         case C_VOCAB_DATA:
@@ -1195,6 +1196,13 @@ enum { V_THEME = 1000, V_OCT, V_MIDI_CH, V_MIDI_OUT, V_BT_ON, V_BT_DEV, V_BT_LIN
        V_MO_KIT1, V_MO_KIT2, V_MO_KIT3, V_MO_KIT4 };
 typedef struct { const char *name; int16_t it[4]; } sub_t;
 #define _ (-1)
+static int sub_item(const sub_t *sb, int k)
+{
+    int it = sb->it[k];
+    if ((it == P_G1_A || it == P_G1_B) && pint(&S, P_G1_FUNC) == GEN_SEQUENCE) return -1;
+    if ((it == P_G2_A || it == P_G2_B) && pint(&S, P_G2_FUNC) == GEN_SEQUENCE) return -1;
+    return it;
+}
 static const sub_t SUB_SCALE[] = {
     {"Tuning", {P_SCALE, P_ROTATE, P_ROOT, P_OCTAVES}},
     {"Temper & surface", {P_TEMPER, P_SURFACE, _, _}},
@@ -2523,7 +2531,8 @@ static void encoders_in(void)
         }
         for (k = 0; k < 4u; k++)
             if (e[EN_K1 + k]) {
-                edit_item(pg->sub[ui.sub[ui.page]].it[k], e[EN_K1 + k]);
+                int it = sub_item(&pg->sub[ui.sub[ui.page]], k);
+                if (it >= 0) edit_item(it, e[EN_K1 + k]);
                 ui.edit_t[k] = plat_ms();
             }
     }
@@ -2708,7 +2717,7 @@ static void draw_items(const sub_t *sb)
     uint32_t now = plat_ms();
     cv_begin(240, 144, C_BLACK);
     for (k = 0; k < 4; k++) {
-        int it = sb->it[k];
+        int it = sub_item(sb, k);
         int32_t y = k * 36 + 2;
         int hot = now - ui.edit_t[k] < 600u;
         float pos;

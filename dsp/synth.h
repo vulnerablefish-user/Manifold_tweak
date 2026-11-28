@@ -272,6 +272,8 @@ typedef struct {
    swing. An event is a peak of R over the threshold: when, and how strongly. Slower functions at 1/2 .. 1/64 of the
    bar move the threshold, two weights and the selector (Form). Nothing is on a grid. */
 #define RH_NH 12
+#define RH_MAX_EVENTS 16
+typedef struct { uint16_t sample; float strength; } RhEvent;
 enum { RH_THRESHOLD, RH_LOCK, NUM_RH_ENGINES };
 enum { RH_SELECT, RH_COUNT, NUM_RH_ASSIGN };
 #define NUM_SELRATES 5
@@ -295,6 +297,8 @@ typedef struct {
     float lk[4], lkm;              /* Lock: each drum's oscillator phase (cycles), the master's */
     float w0[RH_NH], top0;         /* the patterns: the stream's weights without swing (a step's place in the metre) */
     float lkq[4];                  /* ... and how well it is locked, 0..1 (the screen) */
+    RhEvent seq_events[RH_MAX_EVENTS];
+    uint8_t seq_event_count;
 } Rhythm;
 const char *rh_engine_name(int e);
 const char *rh_assign_name(int a);
@@ -307,11 +311,12 @@ float rhythm_slow(const struct Synth *s, int q, float ph); /* cos 2 pi (x / q - 
 /* ------------------------------------------------------------------ */
 /* Generators (gen.c)                                                  */
 /* ------------------------------------------------------------------ */
-/* A generator is 1..MAX_PTS points on the Tonnetz, each moving along a continuous function of time, each with an
+/* Most generators are 1..MAX_PTS points on the Tonnetz, each moving along a continuous function of time, each with an
    envelope that is a continuous function too. A note's loudness is the sum over the points of the point's envelope
-   times a smooth function of its distance to the note. There is no grid and no sequence. */
+   times a smooth function of its distance to the note. Sequence is the exception: one point visits recorded notes
+   in order, advancing on rhythmic events at the nominal Rate. Both use the same spatial note activation. */
 enum { GEN_ORBIT, GEN_LADDER, GEN_SWARM, GEN_LORENZ, GEN_MOTIF, GEN_DRIFT, GEN_BILLIARD, GEN_GRAVITY, GEN_STRIDE,
-       GEN_LOOPS, GEN_ERODE, GEN_CHORDS, NUM_GENS };
+       GEN_LOOPS, GEN_ERODE, GEN_CHORDS, GEN_SEQUENCE, NUM_GENS };
 enum { ENV_PULSE, ENV_SWELL, ENV_SPEED, ENV_PASS, ENV_HEIGHT, ENV_HOLD, ENV_STREAM, ENV_DRUMS, NUM_ENVS };
 #define NUM_GRATES 16          /* Rate: whole-number ratios to the bar */
 /* a layer's route: it plays, or it modulates the other layer (and is silent): its path moves the other's points, its
@@ -393,6 +398,9 @@ typedef struct {
     float onset;
     uint32_t rises;
     uint32_t rng;
+    uint8_t seq_pos, seq_count, seq_started;
+    float seq_wait, seq_strength;
+    uint32_t seq_revision;       /* phrase revision currently being played */
 } GenSt;
 const char *gen_name(int g);
 const char *env_name(int e);
@@ -478,6 +486,7 @@ typedef struct {
     uint8_t vocab_on;              /* enforce the vocabulary mask */
     uint8_t vocab_notes[16];       /* recorded pitch sequence, in original order */
     uint8_t vocab_count;           /* number of recorded notes */
+    uint32_t vocab_revision;      /* increments whenever the phrase changes */
 } Layer;
 
 /* ------------------------------------------------------------------ */

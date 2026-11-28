@@ -1,16 +1,18 @@
 /*
- * The generators. A generator is one to eight points on the Tonnetz, each moving along a continuous function of
+ * The generators. Most generators are one to eight points on the Tonnetz, each moving along a continuous function of
  * time, each carrying an envelope that is a continuous function too. Every node's drive is
  *
  *     u_n(t) = wt_n * sum over points j of  e_j(t) * w(|q_j(t) - node_n| / Reach)
  *
  * with w a smooth bump of the point's distance to the node on the surface (the Tonnetz: neighbours are fifths, thirds,
  * sixths) and wt_n the note's tonal weight (engine.c). So pitch is where a point is, and loudness is
- * its envelope where it is: there is no grid, no sequence and no event anywhere. Polyphony is the number of points
- * (Points), spread along the same motion (Spread).
+ * its envelope where it is: continuous motion, continuous envelopes, no grid. Polyphony is the number of points
+ * (Points), spread along the same motion (Spread). Sequence is the exception: one point visits recorded notes in
+ * their original order, advancing on rhythmic events at the nominal Rate. It uses the same spatial note activation.
  *
- * Motions: nine, each a different kind of behaviour (A and B are each one's two controls; Rate its speed, a
- * whole-number ratio to the bar, so a periodic motion repeats with the rhythm):
+ * Motions: thirteen, each a different kind of behaviour (A and B are each one's two controls; Rate its speed, a
+ * whole-number ratio to the bar, so a periodic motion repeats with the rhythm; Sequence advances on rhythmic events,
+ * with Rate setting its nominal progression):
  *   Orbit      a closed figure at a frequency ratio (a Lissajous figure): a loop, an ostinato
  *   Ladder     a run through the notes in order of pitch, up, up and down, or down, resting on each: scales and
  *              arpeggios by step (every other motion moves on the lattice, by fifths and thirds)
@@ -23,6 +25,11 @@
  *   Gravity    the point orbits the key's own notes (wells at the ding, then its fifth, then its third): it falls
  *              toward the tonic, swings round it and away
  *   Stride     it moves only as the rhythm's stream peaks, and turns while it rests: a melody that steps on the beat
+ *   Loops      independent swells on notes from the key, each with a different loop length; they rarely line up twice
+ *   Erode      a six-note figure repeated in a loop, progressively wearing away until it is renewed
+ *   Chords     points form a chord that changes through a four-chord progression; voicing controls its openness
+ *   Sequence   one point visits the recorded pitch phrase in order, advancing on rhythmic events at the nominal Rate
+ *
  * Envelopes (each point's, Contour shapes them):
  *   Pulse      a periodic peak, at Env rate in exact ratio to the bar and locked to it
  *   Swell      a periodic swell, the same
@@ -39,7 +46,7 @@
 #include "synth.h"
 #include "mstring.h"
 
-static const char *const GEN_N[NUM_GENS] = {"Orbit", "Ladder", "Swarm", "Lorenz", "Motif", "Drift", "Billiard", "Gravity", "Stride", "Loops", "Erode", "Chords"};
+static const char *const GEN_N[NUM_GENS] = {"Orbit", "Ladder", "Swarm", "Lorenz", "Motif", "Drift", "Billiard", "Gravity", "Stride", "Loops", "Erode", "Chords", "Sequence"};
 const char *gen_name(int g) { return g >= 0 && g < NUM_GENS ? GEN_N[g] : "?"; }
 static const char *const ENV_N[NUM_ENVS] = {"Pulse", "Swell", "Speed", "Pass", "Height", "Hold", "Stream", "Drums"};
 const char *env_name(int e) { return e >= 0 && e < NUM_ENVS ? ENV_N[e] : "?"; }
@@ -78,7 +85,7 @@ float grate_value(int r) { return GRATE_V[r < 0 ? 0 : r >= NUM_GRATES ? NUM_GRAT
 static const char *const AB_N[NUM_GENS][2] = {
     {"Ratio", "Phase"}, {"Span", "Contour"}, {"Coupling", "Spread"}, {"Chaos", "Zoom"}, {"Figure", "Answer"},
     {"Detail", "Density"}, {"Angle", "Bumper"}, {"Wells", "Energy"}, {"Turn", "Stride"},
-    {"Notes", "Swell"}, {"Life", "Wear"}, {"Progression", "Voicing"}};
+    {"Notes", "Swell"}, {"Life", "Wear"}, {"Progression", "Voicing"}, {"", ""}};
 const char *gen_ab_name(int g, int which) { return g >= 0 && g < NUM_GENS ? AB_N[g][which & 1] : "?"; }
 
 static const float ORBIT_R[8] = {1.f, 2.f, 1.5f, 4.f / 3, 1.25f, 5.f / 3, 3.f, 2.5f};
@@ -182,6 +189,39 @@ static void setup(GenSt *g, int func, int n) {
         if (func == GEN_BILLIARD || func == GEN_STRIDE) { g->sx[j] = (h1 - .5f) * .7f; g->sy[j] = (h2 - .5f) * .7f; g->sz[j] = .07f + .381966f * (float)j + .3f * h1; }
         if (func == GEN_GRAVITY) { g->sx[j] = .3f * fsin(h1 + .37f * (float)j + .25f); g->sy[j] = .3f * fsin(h1 + .37f * (float)j);
                                    g->sz[j] = -.9f * fsin(h1 + .37f * (float)j); g->sw[j] = .9f * fsin(h1 + .37f * (float)j + .25f); }
+    }
+}
+
+/* Sequence: rhythmic events advance the ordered phrase, at most at the nominal Rate. */
+DSP_CTL static void sequence_clock(GenSt *g, const Layer *L, const Rhythm *m, float dt, float rate, float bar, float run) {
+    uint8_t count = L->vocab_count;
+    if (g->seq_revision != L->vocab_revision || g->seq_count != count) {
+        g->seq_revision = L->vocab_revision; g->seq_count = count;
+        g->seq_pos = 0; g->seq_started = 0;
+        g->seq_wait = 0.f; g->seq_strength = 0.f;
+    }
+    if (count == 0 || run <= 0.f) return;
+    float interval = bar / ((float)count * (rate > 1e-6f ? rate : 1e-6f));
+    float prev = 0.f;
+    for (int i = 0; i < m->seq_event_count; i++) {
+        float at = (float)m->seq_events[i].sample * dt / (float)SUB;
+        if (at < prev) at = prev;
+        if (g->seq_started && g->seq_wait > 0.f) {
+            g->seq_wait -= at - prev;
+            if (g->seq_wait < 0.f) g->seq_wait = 0.f;
+        }
+        prev = at;
+        if (!g->seq_started) {
+            g->seq_started = 1; g->seq_pos = 0;
+            g->seq_wait = interval; g->seq_strength = m->seq_events[i].strength;
+        } else if (g->seq_wait <= 0.f) {
+            g->seq_pos = (uint8_t)((g->seq_pos + 1u) % count);
+            g->seq_wait = interval; g->seq_strength = m->seq_events[i].strength;
+        }
+    }
+    if (g->seq_started && g->seq_wait > 0.f) {
+        g->seq_wait -= dt - prev;
+        if (g->seq_wait < 0.f) g->seq_wait = 0.f;
     }
 }
 
@@ -455,6 +495,21 @@ DSP_CTL static void motion(Synth *s, GenSt *g, int func, int j, float tc, float 
         *x = x0 + (x1 - x0) * gl; *y = y0 + (y1 - y0) * gl;
         *h = (float)seg / 3.f;
     } break;
+    case GEN_SEQUENCE: {
+        int l = g == &s->layer[1].g;
+        prep(s, l, j);
+        Layer *L = &s->layer[l];
+        if (!L->vocab_count || !g->seq_started || g->seq_pos >= L->vocab_count) {
+            *x = *y = 0.f; *h = 0.f; g->mgn[j] = 0.f;
+        } else {
+            int note = L->vocab_notes[g->seq_pos];
+            if (note >= g_nord[l]) {
+                *x = *y = 0.f; *h = 0.f; g->mgn[j] = 0.f;
+            } else {
+                ncache(l, note, x, y); *h = 1.f; g->mgn[j] = 1.f;
+            }
+        }
+    } break;
     default: *x = *y = 0.f; *h = 0.f; break;
     }
 }
@@ -479,6 +534,10 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
     float C = pval(s, LP(l, P_G1_CONTOUR)), reach = pval(s, LP(l, P_G1_REACH)), energy = pval(s, LP(l, P_G1_ENERGY));
     float bar = m->bar_sec > .05f ? m->bar_sec : 2.f;
     float run = (s->transport && !s->mute_seq) ? 1.f : 0.f;
+    if (func == GEN_SEQUENCE) {
+        npts = 1; spread = 0.f;
+        sequence_clock(g, L, m, dt, rate, bar, run);
+    }
     float lvl = .35f + .65f * energy;
     g->npts = npts;
     /* the route: this layer modulates (it is silent; its Energy is the depth), or it is modulated by the other */
@@ -545,19 +604,20 @@ DSP_CTL void gen_tick(Synth *s, int l, float dt) {
         /* a motion's discrete choices (a ratio, a petal count, a number of turns), the motion itself and the number
            of points change the formula, not the time: when one changes, the point keeps its place and glides from it
            onto the new path (the offset decays over about 0.3 s), so the path stays continuous */
-        if (key != g->key) { g->jx[j] += g->rx[j] - x; g->jy[j] += g->ry[j] - y; g->jh[j] += g->rh[j] - h; }
+        if (func != GEN_SEQUENCE && key != g->key) { g->jx[j] += g->rx[j] - x; g->jy[j] += g->ry[j] - y; g->jh[j] += g->rh[j] - h; }
         g->rx[j] = x; g->ry[j] = y; g->rh[j] = h;
         g->jx[j] *= jd; g->jy[j] *= jd; g->jh[j] *= jd;
+        if (func == GEN_SEQUENCE) { g->jx[j] = g->jy[j] = g->jh[j] = 0.f; g->ox[j] = g->oy[j] = 0.f; }
         float mx = x + g->ox[j], my = y + g->oy[j];          /* the motion alone (for its speed: the glide is not the motion) */
         x += g->jx[j]; y += g->jy[j]; h = fclamp(h + g->jh[j], 0.f, 1.f);
         /* Moves: the modulator's path is added to this one's (point j takes point j mod n of the other) */
-        if (is_car && mroute == ROUTE_MOVE) { int jj = j % (mg->npts > 0 ? mg->npts : 1); x += depth * mg->x[jj]; y += depth * mg->y[jj]; }
+        if (func != GEN_SEQUENCE && is_car && mroute == ROUTE_MOVE) { int jj = j % (mg->npts > 0 ? mg->npts : 1); x += depth * mg->x[jj]; y += depth * mg->y[jj]; }
         /* the keys pull the point toward their notes (continuously): the pull is the way to each note on the surface,
            from where the point is drawn, taken back into the motion's own coordinates */
         float fx = 0.f, fy = 0.f, fw = 0.f;
         float q0x, q0y; int anyk = 0;
         for (int i = 0; i < N; i++) if (g->kin[i] > 1e-3f) anyk = 1;
-        if (anyk && pint(s, P_KEY_PULL)) {                   /* (Keys pull off: a key plays its note; the points carry on) */
+        if (func != GEN_SEQUENCE && anyk && pint(s, P_KEY_PULL)) {                   /* (Keys pull off: a key plays its note; the points carry on) */
             path_view(s, x, y, &q0x, &q0y);
             for (int i = 0; i < N; i++) if (g->kin[i] > 1e-3f) {
                 float dX = s->eng.node[i].x - q0x, dY = s->eng.node[i].y - q0y;

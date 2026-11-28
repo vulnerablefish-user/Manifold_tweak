@@ -71,6 +71,34 @@ static int ncand;
 DSP_INL void emit(int d, float v, int32_t t, int lin) {
     if (ncand < NCAND) { cand[ncand].d = (int8_t)d; cand[ncand].lin = (int8_t)lin; cand[ncand].v = v; cand[ncand].t = t; ncand++; }
 }
+
+/* Sequence events are independent of drum routing and audio candidates. */
+DSP_CTL static void rh_event_add(Rhythm *m, int sample, float strength) {
+    if (sample < 0) sample = 0;
+    if (sample >= SUB) sample = SUB - 1;
+    for (int i = 0; i < m->seq_event_count; i++) {
+        if (m->seq_events[i].sample == (uint16_t)sample) {
+            if (strength > m->seq_events[i].strength) m->seq_events[i].strength = strength;
+            return;
+        }
+    }
+    if (m->seq_event_count < RH_MAX_EVENTS) {
+        int i = m->seq_event_count++;
+        m->seq_events[i].sample = (uint16_t)sample;
+        m->seq_events[i].strength = strength;
+    }
+}
+DSP_CTL static void rh_event_sort(Rhythm *m) {
+    for (int i = 1; i < m->seq_event_count; i++) {
+        RhEvent e = m->seq_events[i];
+        int j = i;
+        while (j > 0 && m->seq_events[j - 1].sample > e.sample) {
+            m->seq_events[j] = m->seq_events[j - 1];
+            j--;
+        }
+        m->seq_events[j] = e;
+    }
+}
 /* a drum's line now: the knob or the matrix may move a set line among its relatives, never to Linear (a line set
    stays a line); a drum set to Linear stays linear */
 DSP_INL int pat_idx(const Synth *s, int d) {
@@ -197,9 +225,10 @@ DSP_CTL static void lock_tick(Synth *s, float dx, int run) {
         if (nw < old) nw = old;
         if (nw >= 1.f) {
             nw -= 1.f;
+            float fr = (1.f - old) / (nw + 1.f - old + 1e-9f);
+            float st = fclamp(.55f + .4f * q, .25f, 1.f);
+            if (s->transport && !pat_idx(s, d)) rh_event_add(m, (int32_t)(fr * (float)SUB), st);
             if (run && pint(s, DP(d, P_D1_SRC)) == DSRC_STREAM && pval(s, DP(d, P_D1_DENS)) >= .01f && !pat_idx(s, d)) {
-                float fr = (1.f - old) / (nw + 1.f - old + 1e-9f);
-                float st = fclamp(.55f + .4f * q, .25f, 1.f);
                 emit(d, (1.f - acc) + acc * st, (int32_t)(fr * (float)SUB), 1);
                 m->nev++; m->ev_s = st; m->ev_flash = 1.f;
                 for (int j = 0; j < NUM_DRUMS; j++) if (j != d) m->lk[j] -= .06f * K * fsin(m->lk[j]) * (1.f / PI_F);
@@ -218,7 +247,7 @@ DSP_INL float pat_pos(int n, float f, int lev16) {
     return (float)(n >> 2) * .25f + u * .25f;
 }
 /* the patterns: the steps that fall in this tick's window (1.5 ticks back, as the stream's events land) */
-DSP_CTL static void pat_tick(Synth *s, float dx) {
+DSP_CTL static void pat_tick(Synth *s, float dx, int on) {
     Rhythm *m = &s->meter;
     float lag = 1.5f * dx, t1 = m->tau - lag, t0 = t1 - dx;
     float f = .5f + .25f * pval(s, P_RH_SWING), thn = m->th / (m->top > 1e-6f ? m->top : 1.f), acc = pval(s, P_DR_ACCENT), fill = pval(s, P_RH_FILL);
@@ -226,7 +255,7 @@ DSP_CTL static void pat_tick(Synth *s, float dx) {
     int a0 = (int)floorf(t0 * 16.f) - 2, a1 = (int)floorf(t1 * 16.f) + 1;   /* (a step moves less than a 16th) */
     for (int d = 0; d < NUM_DRUMS; d++) {
         int pi = pat_idx(s, d);
-        if (!pi || pval(s, DP(d, P_D1_DENS)) < .01f) continue;
+        if (!pi) continue;
         for (int a = a0; a <= a1; a++) {
             int n = a & 15, bo = (a - n) / 16;                 /* the step in its bar, the bar relative to this one */
             float pos = (float)bo + pat_pos(n, f, lev16);
@@ -261,8 +290,11 @@ DSP_CTL static void pat_tick(Synth *s, float dx) {
             float st = fclamp((r0 - gate) / (1.f - gate + 1e-6f), 0.f, 1.f);
             float v = (gh ? .42f : 1.f) * ((1.f - .55f * acc) + .55f * acc * st);
             int32_t t = (int32_t)((pos - t0) / dx * (float)SUB);
-            emit(d, v, t < 0 ? 0 : t, 0);
-            m->nev++; m->ev_s = st; m->ev_flash = 1.f;
+            rh_event_add(m, t, st);
+            if (on && pval(s, DP(d, P_D1_DENS)) >= .01f) {
+                emit(d, v, t < 0 ? 0 : t, 0);
+                m->nev++; m->ev_s = st; m->ev_flash = 1.f;
+            }
         }
     }
 }
@@ -287,6 +319,7 @@ DSP_CTL static void cand_flush(Synth *s) {
 
 DSP_CTL void rhythm_tick(Synth *s, float dt) {
     Rhythm *m = &s->meter;
+    m->seq_event_count = 0;
     m->beats = 4.f;
     m->bar_sec = m->beats * 60.f / pval(s, P_TEMPO);
     float dx = 0.f;
@@ -307,9 +340,9 @@ DSP_CTL void rhythm_tick(Synth *s, float dt) {
     m->ev_flash *= .95f;
     int on = pint(s, P_DR_ON) && s->transport;
     ncand = 0;
-    if (on && dx > 0.f) pat_tick(s, dx);
-    if (pint(s, P_RH_ENGINE) == RH_LOCK) { lock_tick(s, dx, on); cand_flush(s); return; }
-    if (dx <= 0.f) { cand_flush(s); return; }
+    if (dx > 0.f) pat_tick(s, dx, on);
+    if (pint(s, P_RH_ENGINE) == RH_LOCK) { lock_tick(s, dx, on); rh_event_sort(m); cand_flush(s); return; }
+    if (dx <= 0.f) { rh_event_sort(m); cand_flush(s); return; }
     /* an event: R peaked at the tick before (R1 above both neighbours) and over the threshold. A parabola through
        the three values puts the peak within the tick; the hit lands a fixed 1.5 ticks (96 samples) after it */
     if (m->R1 > m->R && m->R1 >= m->R2 && m->R1 > th1) {
@@ -317,8 +350,10 @@ DSP_CTL void rhythm_tick(Synth *s, float dt) {
         float pk = m->R1 - .25f * (m->R2 - m->R) * off;
         float st = fclamp((pk - th1) / (m->top - th1 + 1e-6f), 0.f, 1.f);
         int delay = (int)((float)(SUB / 2) + (float)SUB * fclamp(off, -.5f, .5f));
+        rh_event_add(m, delay, st);
         m->nev++; m->ev_s = st; m->ev_flash = 1.f;
         if (on) { if (pint(s, P_RH_ASSIGN) == RH_COUNT) assign_count(s, st, delay); else assign_select(s, st, delay); }
     }
+    rh_event_sort(m);
     cand_flush(s);
 }

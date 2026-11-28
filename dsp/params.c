@@ -1235,6 +1235,7 @@ void synth_vocab_clear(Synth *s) {
         s->layer[l].vocab_on = 0;
         memset(s->layer[l].vocab_notes, 0, sizeof s->layer[l].vocab_notes);
         s->layer[l].vocab_count = 0;
+        s->layer[l].vocab_revision++;
     }
     s->vocab_generation++;
 }
