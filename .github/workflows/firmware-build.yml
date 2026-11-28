@@ -113,5 +113,6 @@ jobs:
           path: |
             build/manifold-1.0.8-pitch1.fwsc
             build/SHA256SUMS
+            build/manifold.map
           if-no-files-found: error
           retention-days: 14
