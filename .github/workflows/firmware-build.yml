@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - pitch-vocabulary-108
+      - ramtext-event-insert
   workflow_dispatch:
 
 permissions:
