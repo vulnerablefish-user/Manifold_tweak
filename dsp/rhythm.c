@@ -72,33 +72,35 @@ DSP_INL void emit(int d, float v, int32_t t, int lin) {
     if (ncand < NCAND) { cand[ncand].d = (int8_t)d; cand[ncand].lin = (int8_t)lin; cand[ncand].v = v; cand[ncand].t = t; ncand++; }
 }
 
-/* Sequence events are independent of drum routing and audio candidates. */
+/* Add an event in chronological order, merging duplicates by strongest hit. */
 DSP_CTL static void rh_event_add(Rhythm *m, int sample, float strength) {
     if (sample < 0) sample = 0;
     if (sample >= SUB) sample = SUB - 1;
-    for (int i = 0; i < m->seq_event_count; i++) {
-        if (m->seq_events[i].sample == (uint16_t)sample) {
-            if (strength > m->seq_events[i].strength) m->seq_events[i].strength = strength;
-            return;
-        }
+
+    int count = m->seq_event_count;
+    int i = 0;
+
+    /* Find the insertion point, or an existing event at this sample. */
+    while (i < count && m->seq_events[i].sample < (uint16_t)sample) i++;
+
+    if (i < count && m->seq_events[i].sample == (uint16_t)sample) {
+        if (strength > m->seq_events[i].strength)
+            m->seq_events[i].strength = strength;
+        return;
     }
-    if (m->seq_event_count < RH_MAX_EVENTS) {
-        int i = m->seq_event_count++;
-        m->seq_events[i].sample = (uint16_t)sample;
-        m->seq_events[i].strength = strength;
-    }
+
+    /* Preserve the original limit: ignore new unique events when full. */
+    if (count >= RH_MAX_EVENTS) return;
+
+    /* Make room and insert in chronological order. */
+    for (int j = count; j > i; j--)
+        m->seq_events[j] = m->seq_events[j - 1];
+
+    m->seq_events[i].sample = (uint16_t)sample;
+    m->seq_events[i].strength = strength;
+    m->seq_event_count++;
 }
-DSP_CTL static void rh_event_sort(Rhythm *m) {
-    for (int i = 1; i < m->seq_event_count; i++) {
-        RhEvent e = m->seq_events[i];
-        int j = i;
-        while (j > 0 && m->seq_events[j - 1].sample > e.sample) {
-            m->seq_events[j] = m->seq_events[j - 1];
-            j--;
-        }
-        m->seq_events[j] = e;
-    }
-}
+
 /* a drum's line now: the knob or the matrix may move a set line among its relatives, never to Linear (a line set
    stays a line); a drum set to Linear stays linear */
 DSP_INL int pat_idx(const Synth *s, int d) {
@@ -341,8 +343,8 @@ DSP_CTL void rhythm_tick(Synth *s, float dt) {
     int on = pint(s, P_DR_ON) && s->transport;
     ncand = 0;
     if (dx > 0.f) pat_tick(s, dx, on);
-    if (pint(s, P_RH_ENGINE) == RH_LOCK) { lock_tick(s, dx, on); rh_event_sort(m); cand_flush(s); return; }
-    if (dx <= 0.f) { rh_event_sort(m); cand_flush(s); return; }
+    if (pint(s, P_RH_ENGINE) == RH_LOCK) { lock_tick(s, dx, on); cand_flush(s); return; }
+    if (dx <= 0.f) { cand_flush(s); return; }
     /* an event: R peaked at the tick before (R1 above both neighbours) and over the threshold. A parabola through
        the three values puts the peak within the tick; the hit lands a fixed 1.5 ticks (96 samples) after it */
     if (m->R1 > m->R && m->R1 >= m->R2 && m->R1 > th1) {
@@ -354,6 +356,6 @@ DSP_CTL void rhythm_tick(Synth *s, float dt) {
         m->nev++; m->ev_s = st; m->ev_flash = 1.f;
         if (on) { if (pint(s, P_RH_ASSIGN) == RH_COUNT) assign_count(s, st, delay); else assign_select(s, st, delay); }
     }
-    rh_event_sort(m);
+
     cand_flush(s);
 }
