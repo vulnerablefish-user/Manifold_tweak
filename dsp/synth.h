@@ -476,6 +476,8 @@ typedef struct {
     int     n_osc;                 /* oscillators rendered this block (the profiler, the tests) */
     uint32_t vocab_mask;           /* notes allowed to the motion generator */
     uint8_t vocab_on;              /* enforce the vocabulary mask */
+    uint8_t vocab_notes[16];       /* recorded pitch sequence, in original order */
+    uint8_t vocab_count;           /* number of recorded notes */
 } Layer;
 
 /* ------------------------------------------------------------------ */

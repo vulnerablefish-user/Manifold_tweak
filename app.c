@@ -151,7 +151,7 @@ static volatile uint8_t scene_busy;
 
 /* ------------------------------------------------------------------ the queue --- */
 enum { C_PARAM, C_MACRO, C_ROLL, C_MUTATE, C_STYLE, C_NOTE, C_TRANSPORT, C_CAP, C_LOAD, C_LOCK, C_PANIC, C_SCENE,
-       C_LAYER, C_MUTESEQ, C_KEYS, C_SLOT, C_VOCAB };
+       C_LAYER, C_MUTESEQ, C_KEYS, C_SLOT, C_VOCAB, C_VOCAB_DATA };
 enum { CAP_PAD, CAP_UNI, CAP_NODES, CAP_WSOS, CAP_FBST, CAP_CPU2, CAP_HARM };
 typedef struct { uint8_t op, a; uint16_t b; float f; uint32_t u; } cmd_t;
 #define QN 64u
@@ -215,7 +215,14 @@ static void drain(void)                  /* audio interrupt, start of a block */
         case C_VOCAB:
             if (c->a < NUM_LAYERS) {
                 S.layer[c->a].vocab_mask = c->u;
-                S.layer[c->a].vocab_on = (uint8_t)c->b;
+                S.layer[c->a].vocab_count = c->b <= 16u ? (uint8_t)c->b : 0;
+                S.layer[c->a].vocab_on = S.layer[c->a].vocab_count != 0;
+            }
+            break;
+        case C_VOCAB_DATA:
+            if (c->a < NUM_LAYERS && c->b < 4u) {
+                for (int i = 0; i < 4; i++)
+                    S.layer[c->a].vocab_notes[c->b * 4u + (uint32_t)i] = (uint8_t)(c->u >> (i * 8));
             }
             break;
         case C_SLOT:                     /* a matrix route: a the route, b source << 8 | destination, f the depth */
@@ -1417,17 +1424,30 @@ static void vocab_toggle(void)
                 targets == 1 ? "Recording Layer 1" : "Recording Layer 2");
     } else {
         int any_notes = 0;
-        if (q_w - q_r > QN - ((ui.vocab_targets & 1u ? 1u : 0u) + (ui.vocab_targets & 2u ? 1u : 0u))) {
+        uint32_t needed = 5u * ((ui.vocab_targets & 1u ? 1u : 0u) + (ui.vocab_targets & 2u ? 1u : 0u));
+        if (q_w - q_r > QN - needed) {
             app_say("Vocabulary", "Command queue busy");
             return;
         }
         for (int l = 0; l < NUM_LAYERS; l++) {
             if (ui.vocab_targets & (1u << l)) {
                 if (vocab_count[l]) any_notes = 1;
+                for (int chunk = 0; chunk < 4; chunk++) {
+                    uint32_t packed = 0;
+                    for (int i = 0; i < 4; i++) {
+                        uint32_t ix = (uint32_t)chunk * 4u + (uint32_t)i;
+                        if (ix < vocab_count[l])
+                            packed |= (uint32_t)vocab_notes[l][ix] << (i * 8);
+                    }
+                    if (!cmd(C_VOCAB_DATA, (uint32_t)l, (uint32_t)chunk, 0.0f, packed)) {
+                        app_say("Vocabulary", "Command queue busy");
+                        return;
+                    }
+                }
                 uint32_t mask = 0;
                 for (int i = 0; i < vocab_count[l]; i++)
                     mask |= 1u << vocab_notes[l][i];
-                if (!cmd(C_VOCAB, (uint32_t)l, vocab_count[l] ? 1u : 0u, 0.0f, mask)) {
+                if (!cmd(C_VOCAB, (uint32_t)l, vocab_count[l], 0.0f, mask)) {
                     app_say("Vocabulary", "Command queue busy");
                     return;
                 }
